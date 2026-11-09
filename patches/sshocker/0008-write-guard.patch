@@ -1,0 +1,525 @@
+diff --git a/pkg/reversesshfs/guard_test.go b/pkg/reversesshfs/guard_test.go
+new file mode 100644
+index 0000000..f3055dc
+--- /dev/null
++++ b/pkg/reversesshfs/guard_test.go
+@@ -0,0 +1,71 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"slices"
++	"testing"
++)
++
++// Guard is asked before each write the read-only names allow, with the path
++// relative to the served directory; a no refuses it and nothing changes.
++// Reads never ask.
++func TestRootedGuard(t *testing.T) {
++	var asked []string
++	allow := false
++	Guard = func(root, rel string, entry bool) bool {
++		asked = append(asked, rel)
++		return allow || rel != ".envrc" && rel != "src/new"
++	}
++	t.Cleanup(func() { Guard = nil })
++	c, root := setupRooted(t, false)
++	os.WriteFile(filepath.Join(root, ".envrc"), []byte("orig"), 0o644)
++	p := func(s string) string { return filepath.Join(root, s) }
++
++	for _, op := range []struct {
++		name string
++		rel  string
++		f    func() error
++	}{
++		{"write", ".envrc", func() error {
++			f, err := c.OpenFile(p(".envrc"), os.O_WRONLY|os.O_TRUNC)
++			if err == nil {
++				f.Close()
++			}
++			return err
++		}},
++		{"remove", ".envrc", func() error { return c.Remove(p(".envrc")) }},
++		{"rename onto", ".envrc", func() error { return c.PosixRename(p("src/main.go"), p(".envrc")) }},
++		{"chmod", ".envrc", func() error { return c.Chmod(p(".envrc"), 0o755) }},
++		{"mkdir", "src/new", func() error { return c.Mkdir(p("src/new")) }},
++	} {
++		asked = nil
++		if err := op.f(); err == nil {
++			t.Errorf("%s: allowed though Guard said no", op.name)
++		}
++		if !slices.Contains(asked, op.rel) {
++			t.Errorf("%s: Guard asked %q, not %q", op.name, asked, op.rel)
++		}
++	}
++	if b, _ := os.ReadFile(p(".envrc")); string(b) != "orig" {
++		t.Errorf(".envrc changed: %q", b)
++	}
++	if _, err := os.Stat(p("src/main.go")); err != nil {
++		t.Error("src/main.go moved")
++	}
++	asked = nil
++	f, err := c.Open(p(".envrc"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	f.Close()
++	if len(asked) != 0 {
++		t.Errorf("a read asked: %q", asked)
++	}
++	allow = true
++	if err := c.Chmod(p(".envrc"), 0o600); err != nil {
++		t.Errorf("allowed: %v", err)
++	}
++}
+diff --git a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
+index d135e58..77b9ce8 100644
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -8,6 +8,7 @@ import (
+ 	"io"
+ 	"os"
+ 	"path"
++	"path/filepath"
+ 	"slices"
+ 	"strings"
+ 	"sync"
+@@ -30,6 +31,7 @@ type rootedHandlers struct {
+ 	readonly      bool
+ 	readonlyNames []string
+ 	foldedNames   []string // readonlyNames as FoldName gives them
++	guardRoot     string   // the served directory as Guard is told
+ 	rootedSys
+ 
+ 	mu           sync.Mutex
+@@ -57,6 +59,7 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
+ 		root:          root,
+ 		readonly:      readonly,
+ 		readonlyNames: readonlyNames,
++		guardRoot:     filepath.Clean(localPath),
+ 		rootedSys:     sys,
+ 		noopRemovals:  make(map[string]time.Time),
+ 	}
+@@ -125,7 +128,9 @@ func (h *rootedHandlers) rel(p string) (string, error) {
+ 	return "", errDenied
+ }
+ 
+-func (h *rootedHandlers) writableRel(p string) (string, error) {
++// writableRel is the path relative to the root of the request path p, if it may be written.
++// entry: see Guard.
++func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
+ 	if h.readonly {
+ 		return "", errDenied
+ 	}
+@@ -136,9 +141,34 @@ func (h *rootedHandlers) writableRel(p string) (string, error) {
+ 	if h.isReadonlyName(r) || !writableName(r) {
+ 		return "", errDenied
+ 	}
++	if lexicalGuard {
++		if err := h.guard(r, entry); err != nil {
++			return "", err
++		}
++	}
+ 	return r, nil
+ }
+ 
++// Guard, when set by the program running the server, is asked before every
++// write that the read-only names allow, with the served directory and the
++// path relative to it: false refuses the write (EACCES). It may block, to ask
++// the user; the client's requests wait meanwhile.
++//
++// entry is true when rel is a name being created, removed, moved or linked, as opposed to
++// a file whose content or attributes change: then a directory that holds protected paths
++// matters as well, since creating or moving it creates or moves them.
++//
++// rel is spelled as the file system has it where the server can tell (Windows: the
++// normalized name, in which 8.3 short names are replaced by long ones), otherwise as the client sent it.
++var Guard func(root, rel string, entry bool) bool
++
++func (h *rootedHandlers) guard(rel string, entry bool) error {
++	if Guard != nil && !Guard(h.guardRoot, rel, entry) {
++		return errDenied
++	}
++	return nil
++}
++
+ func (h *rootedHandlers) isReadonlyName(rel string) bool {
+ 	for _, c := range strings.Split(rel, "/") {
+ 		fc := FoldName(c)
+diff --git a/pkg/reversesshfs/rooted_guard_test.go b/pkg/reversesshfs/rooted_guard_test.go
+new file mode 100644
+index 0000000..27b844b
+--- /dev/null
++++ b/pkg/reversesshfs/rooted_guard_test.go
+@@ -0,0 +1,101 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"runtime"
++	"slices"
++	"strings"
++	"testing"
++)
++
++type guardCall struct {
++	rel   string
++	entry bool
++}
++
++// A guest builds a guarded file's parent folder elsewhere and moves it into place: Guard is told
++// that the names are being created, moved, linked or removed (entry), so it can refuse the
++// parent folder of a guarded path, which a write-only check on the path would not see.
++func TestRootedGuardParents(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("Windows has no symlinks here and asks with normalized names")
++	}
++	var calls []guardCall
++	allow := false
++	Guard = func(root, rel string, entry bool) bool {
++		calls = append(calls, guardCall{rel, entry})
++		parts := strings.Split(strings.ToLower(rel), "/")
++		last := parts[len(parts)-1]
++		if allow {
++			return true
++		}
++		if last == ".vscode" && entry {
++			return false
++		}
++		return !(last == "tasks.json" && len(parts) > 1 && parts[len(parts)-2] == ".vscode")
++	}
++	t.Cleanup(func() { Guard = nil })
++	c, root := setupRooted(t, false)
++	p := func(s string) string { return filepath.Join(root, s) }
++	must := func(err error) {
++		t.Helper()
++		if err != nil {
++			t.Fatal(err)
++		}
++	}
++	must(os.MkdirAll(p(".vscode"), 0o755))
++	must(os.WriteFile(p(".vscode/tasks.json"), []byte("orig"), 0o644))
++	must(c.Mkdir(p("evil")))
++	f, err := c.Create(p("evil/tasks.json"))
++	must(err)
++	_, _ = f.Write([]byte("pwn"))
++	must(f.Close())
++	if !slices.Contains(calls, guardCall{"evil/tasks.json", false}) {
++		t.Errorf("a write is not an entry: %v", calls)
++	}
++
++	for _, op := range []struct {
++		name string
++		rel  string
++		f    func() error
++	}{
++		{"rename onto the parent", ".vscode", func() error { return c.PosixRename(p("evil"), p(".vscode")) }},
++		{"rename onto the parent, no replace", ".vscode", func() error { return c.Rename(p("evil"), p(".vscode")) }},
++		{"symlink as the parent", ".vscode", func() error { return c.Symlink("evil", p(".vscode")) }},
++		{"rename the parent away", ".vscode", func() error { return c.PosixRename(p(".vscode"), p("old")) }},
++		{"remove the parent", ".vscode", func() error { return c.RemoveDirectory(p(".vscode")) }},
++		{"hard link to the file", ".vscode/tasks.json", func() error { return c.Link(p(".vscode/tasks.json"), p("evil/alias")) }},
++		{"mkdir the parent", "sub/.vscode", func() error { return c.Mkdir(p("sub/.vscode")) }},
++	} {
++		if op.rel == "sub/.vscode" {
++			must(os.Mkdir(p("sub"), 0o755))
++		}
++		calls = nil
++		if err := op.f(); err == nil {
++			t.Errorf("%s: allowed though Guard said no", op.name)
++		}
++		if !slices.Contains(calls, guardCall{op.rel, true}) {
++			t.Errorf("%s: Guard asked %v, not %q as an entry", op.name, calls, op.rel)
++		}
++	}
++	if b, _ := os.ReadFile(p(".vscode/tasks.json")); string(b) != "orig" {
++		t.Errorf("tasks.json: %q", b)
++	}
++	if fi, err := os.Lstat(p(".vscode")); err != nil || !fi.IsDir() {
++		t.Errorf(".vscode: %v, %v", fi, err)
++	}
++	if _, err := os.Lstat(p("evil/alias")); err == nil {
++		t.Error("hard link made")
++	}
++
++	// With Guard saying yes, the same moves work: they were refused by Guard alone.
++	allow = true
++	must(c.PosixRename(p(".vscode"), p("old")))
++	must(c.PosixRename(p("evil"), p(".vscode")))
++	if b, _ := os.ReadFile(p(".vscode/tasks.json")); string(b) != "pwn" {
++		t.Errorf("tasks.json: %q", b)
++	}
++}
+diff --git a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
+index 9221504..6515874 100644
+--- a/pkg/reversesshfs/rooted_unix.go
++++ b/pkg/reversesshfs/rooted_unix.go
+@@ -15,6 +15,10 @@ import (
+ 
+ var errDenied error = unix.EACCES
+ 
++// lexicalGuard: Guard is asked about the path as the client sent it, and compares it folded (see FoldName).
++// On Windows the names are asked after the handles are open instead.
++const lexicalGuard = true
++
+ // openNonblock: see openRead.
+ const openNonblock = unix.O_NONBLOCK
+ 
+@@ -89,7 +93,7 @@ func (h *rootedHandlers) openParent(rel string) (int, string, error) {
+ }
+ 
+ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+-	rel, err := h.writableRel(r.Filepath)
++	rel, err := h.writableRel(r.Filepath, false)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -144,7 +148,7 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 
+ // inParent calls f with the parent directory fd and the base name of the writable path p.
+ func (h *rootedHandlers) inParent(op, p string, f func(dirfd int, base string) error) error {
+-	rel, err := h.writableRel(p)
++	rel, err := h.writableRel(p, true)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -210,11 +214,11 @@ func (h *rootedHandlers) rename(r *sftp.Request, noReplace bool) error {
+ }
+ 
+ func (h *rootedHandlers) twoPaths(oldPath, newPath string, f func(oldfd int, oldBase string, newfd int, newBase string) error) error {
+-	oldRel, err := h.writableRel(oldPath)
++	oldRel, err := h.writableRel(oldPath, true)
+ 	if err != nil {
+ 		return err
+ 	}
+-	newRel, err := h.writableRel(newPath)
++	newRel, err := h.writableRel(newPath, true)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -235,7 +239,7 @@ func (h *rootedHandlers) twoPaths(oldPath, newPath string, f func(oldfd int, old
+ }
+ 
+ func (h *rootedHandlers) setstat(r *sftp.Request) error {
+-	rel, err := h.writableRel(r.Filepath)
++	rel, err := h.writableRel(r.Filepath, false)
+ 	if err != nil {
+ 		return err
+ 	}
+diff --git a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows.go
+index 94394a4..e4c87c1 100644
+--- a/pkg/reversesshfs/rooted_windows.go
++++ b/pkg/reversesshfs/rooted_windows.go
+@@ -15,6 +15,10 @@ import (
+ 
+ var errDenied error = windows.ERROR_ACCESS_DENIED
+ 
++// lexicalGuard is false: a short name (VSCODE~1) hides the entry from the request path, so Guard
++// is asked with normalized names, by guardAt and guardHandle.
++const lexicalGuard = false
++
+ // openNonblock: opening a file never blocks on Windows.
+ const openNonblock = 0
+ 
+@@ -143,20 +147,56 @@ func normalizedName(h windows.Handle) (string, error) {
+ 	}
+ }
+ 
+-// checkHandle denies fh when its normalized path has a read-only component, or is not under the root.
+-func (h *rootedHandlers) checkHandle(fh windows.Handle) error {
++// normalizedRel is the path of fh relative to the root, slash-separated, with the file system's own spelling.
++func (h *rootedHandlers) normalizedRel(fh windows.Handle) (string, error) {
+ 	name, err := normalizedName(fh)
+ 	if err != nil {
+-		return err
++		return "", err
+ 	}
+ 	if name == h.rootName {
+-		return nil
++		return ".", nil
+ 	}
+ 	rel, ok := strings.CutPrefix(name, h.rootName+`\`)
+ 	if !ok {
+-		return errDenied
++		return "", errDenied
++	}
++	return strings.ReplaceAll(rel, `\`, "/"), nil
++}
++
++// guardAt asks Guard about base in the directory parent, by the normalized name of parent.
++func (h *rootedHandlers) guardAt(parent windows.Handle, base string, entry bool) error {
++	if Guard == nil {
++		return nil
++	}
++	dir, err := h.normalizedRel(parent)
++	if err != nil {
++		return err
++	}
++	return h.guard(path.Join(dir, base), entry)
++}
++
++// guardHandle asks Guard about the file of fh, by its normalized name.
++func (h *rootedHandlers) guardHandle(fh windows.Handle, entry bool) error {
++	if Guard == nil {
++		return nil
++	}
++	rel, err := h.normalizedRel(fh)
++	if err != nil {
++		return err
++	}
++	return h.guard(rel, entry)
++}
++
++// checkHandle denies fh when its normalized path has a read-only component, or is not under the root.
++func (h *rootedHandlers) checkHandle(fh windows.Handle) error {
++	rel, err := h.normalizedRel(fh)
++	if err != nil {
++		return err
++	}
++	if rel == "." {
++		return nil
+ 	}
+-	for _, c := range strings.Split(rel, `\`) {
++	for _, c := range strings.Split(rel, "/") {
+ 		c, _, _ = strings.Cut(c, ":")
+ 		if h.isReadonlyName(c) {
+ 			return errDenied
+@@ -231,8 +271,8 @@ func (h *rootedHandlers) openParent(rel string) (windows.Handle, string, error)
+ 
+ // openChecked opens the writable path p, which must not be a reparse point unless options has FILE_OPEN_REPARSE_POINT.
+ // The caller must close both handles.
+-func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent, fh windows.Handle, err error) {
+-	rel, err := h.writableRel(p)
++func (h *rootedHandlers) openChecked(p string, access, options uint32, entry bool) (parent, fh windows.Handle, err error) {
++	rel, err := h.writableRel(p, entry)
+ 	if err != nil {
+ 		return windows.InvalidHandle, windows.InvalidHandle, err
+ 	}
+@@ -240,6 +280,10 @@ func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent,
+ 	if err != nil {
+ 		return windows.InvalidHandle, windows.InvalidHandle, err
+ 	}
++	if err := h.guardAt(parent, base, entry); err != nil {
++		windows.CloseHandle(parent)
++		return windows.InvalidHandle, windows.InvalidHandle, err
++	}
+ 	var objFlags uint32
+ 	if options&windows.FILE_OPEN_REPARSE_POINT == 0 {
+ 		objFlags = windows.OBJ_DONT_REPARSE
+@@ -247,6 +291,9 @@ func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent,
+ 	fh, err = ntCreate(parent, base, access, 0, windows.FILE_OPEN, options, objFlags)
+ 	if err == nil {
+ 		err = h.checkHandle(fh)
++		if err == nil {
++			err = h.guardHandle(fh, entry)
++		}
+ 		if err != nil {
+ 			windows.CloseHandle(fh)
+ 		}
+@@ -259,7 +306,7 @@ func (h *rootedHandlers) openChecked(p string, access, options uint32) (parent,
+ }
+ 
+ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+-	rel, err := h.writableRel(r.Filepath)
++	rel, err := h.writableRel(r.Filepath, false)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -268,6 +315,9 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 		return nil, err
+ 	}
+ 	defer windows.CloseHandle(parent)
++	if err := h.guardAt(parent, base, false); err != nil {
++		return nil, err
++	}
+ 	pf := r.Pflags()
+ 	var access, options uint32
+ 	switch {
+@@ -298,7 +348,11 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
+ 	}
+ 	// Checked before truncating: base may be the short name of an existing read-only name.
+-	if err := h.checkHandle(fh); err != nil {
++	err = h.checkHandle(fh)
++	if err == nil {
++		err = h.guardHandle(fh, false)
++	}
++	if err != nil {
+ 		windows.CloseHandle(fh)
+ 		return nil, err
+ 	}
+@@ -316,7 +370,7 @@ func (h *rootedHandlers) remove(r *sftp.Request) error {
+ 	if r.Method == "Rmdir" {
+ 		options |= windows.FILE_DIRECTORY_FILE
+ 	}
+-	parent, fh, err := h.openChecked(r.Filepath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, options)
++	parent, fh, err := h.openChecked(r.Filepath, windows.DELETE|windows.FILE_READ_ATTRIBUTES, options, true)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -356,7 +410,7 @@ func deleteHandle(fh windows.Handle) error {
+ }
+ 
+ func (h *rootedHandlers) mkdir(r *sftp.Request) error {
+-	rel, err := h.writableRel(r.Filepath)
++	rel, err := h.writableRel(r.Filepath, true)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -365,6 +419,9 @@ func (h *rootedHandlers) mkdir(r *sftp.Request) error {
+ 		return err
+ 	}
+ 	defer windows.CloseHandle(parent)
++	if err := h.guardAt(parent, base, true); err != nil {
++		return err
++	}
+ 	// A base that is the short name of an existing entry fails with STATUS_OBJECT_NAME_COLLISION.
+ 	fh, err := ntCreate(parent, base, fileDirectoryAccess, fileAttributeNormal, windows.FILE_CREATE,
+ 		windows.FILE_DIRECTORY_FILE, windows.OBJ_DONT_REPARSE)
+@@ -410,11 +467,11 @@ func (h *rootedHandlers) rename(r *sftp.Request, noReplace bool) error {
+ func (h *rootedHandlers) twoPaths(oldPath, newPath string, access, options uint32, noReplace bool,
+ 	f func(src, newParent windows.Handle, newBase string) error,
+ ) error {
+-	newRel, err := h.writableRel(newPath)
++	newRel, err := h.writableRel(newPath, true)
+ 	if err != nil {
+ 		return err
+ 	}
+-	oldParent, src, err := h.openChecked(oldPath, access, options|windows.FILE_OPEN_REPARSE_POINT)
++	oldParent, src, err := h.openChecked(oldPath, access, options|windows.FILE_OPEN_REPARSE_POINT, true)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -425,11 +482,17 @@ func (h *rootedHandlers) twoPaths(oldPath, newPath string, access, options uint3
+ 		return err
+ 	}
+ 	defer windows.CloseHandle(newParent)
++	if err := h.guardAt(newParent, newBase, true); err != nil {
++		return err
++	}
+ 	// newBase may be the short name of an existing read-only name, which would be replaced.
+ 	dst, err := ntCreate(newParent, newBase, windows.FILE_READ_ATTRIBUTES, 0, windows.FILE_OPEN, windows.FILE_OPEN_REPARSE_POINT, 0)
+ 	switch {
+ 	case err == nil:
+ 		err = h.checkHandle(dst)
++		if err == nil {
++			err = h.guardHandle(dst, true)
++		}
+ 		windows.CloseHandle(dst)
+ 		if err != nil {
+ 			return err
+@@ -488,7 +551,7 @@ func (h *rootedHandlers) setstat(r *sftp.Request) error {
+ 	if flags.Size {
+ 		access |= windows.FILE_WRITE_DATA
+ 	}
+-	parent, fh, err := h.openChecked(r.Filepath, access, 0)
++	parent, fh, err := h.openChecked(r.Filepath, access, 0, false)
+ 	if err != nil {
+ 		return err
+ 	}

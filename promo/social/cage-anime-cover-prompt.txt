@@ -1,0 +1,11 @@
+Use case: ads-marketing, open-source community anime key visual.
+Input image 1: the ACTUAL Claude 防封 website cover art, the identity and narrative reference. Make a polished Chinese anime promotional poster based on it, portrait 1536x2048. Preserve the same recognizable orange long-haired adult anime heroine, amber eyes, orange flower hair ornament, black ribbon, modest cream high-neck blouse and dark clothing, warm bronze cage window, extended hand offering a cream envelope sealed with an orange flower wax seal. Preserve her gently aloof, slightly pouty gaze at viewer and warm golden-hour light. This is an affectionate fictional mascot scene, no menace. Render beautiful clean 2D anime linework and nuanced cel shading, luminous hair, delicate face, confident hands and perspective, with painterly warm background. Avoid photorealism, 3D plastic, chibi and extra characters.
+Art direction: an elegant anime illustration artbook cover for a small developer-made open-source project, warm cream paper, burnt orange and dark charcoal typography. Illustration occupies most of the poster, a tall bronze window as natural frame, heroine's face prominent, envelope reaching toward viewer at lower center. Compose the full artwork and text together with excellent readability. Top title region in warm cream, transition naturally into rich illustration; small restrained footer. Strong negative space and generous margins. No dense sales brochure, no feature cards, no prices, no badges, no buttons, no QR, no legal small print, no official endorsement, no watermark. The visual should feel inviting and slightly playful, low commercial intensity.
+Render ONLY this exact copy, correctly and clearly:
+Small top brand: "Claude 防封"
+Large main headline in two lines: "把 Claude 大小姐" / "关起来。"
+One supporting line: "一个为 Claude 准备的开源小窝"
+Near bottom, modest readable feature line: "代理隔离 · 环境自动配置 · 多账号调度"
+Footer platform line: "macOS / Windows / Linux"
+Footer repository: "github.com/tan396222-prog/Claude-AntiBan"
+No extra text or tiny pseudo-writing. Do not put words on the envelope. Keep typography separate from the heroine's face and hands. Output a finished ready-to-share poster, not a mockup of a poster on a wall.

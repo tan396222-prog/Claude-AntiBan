@@ -1,0 +1,52 @@
+{
+  "architecture": "amd64",
+  "dotnet": {
+    "runtimeVersion": "10.0.14"
+  },
+  "mihomo": {
+    "version": "v1.19.33",
+    "file": "mihomo-windows-amd64-compatible-v1.19.33.zip",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-windows-amd64-compatible-v1.19.33.zip",
+    "algorithm": "SHA256",
+    "hash": "7aaf636a4f2172dcd8ec34ac4f52797b059195e5afd6409508c963e545f8864d",
+    "source": "https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.tar.gz"
+  },
+  "mihomoSource": {
+    "version": "v1.19.33",
+    "file": "mihomo-v1.19.33-source.tar.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.tar.gz",
+    "algorithm": "SHA256",
+    "hash": "e7c596b37ff27ec487d19b1920f73e0c97a78067ea35766530ee9659ade72711"
+  },
+  "openssh": {
+    "version": "10.4.0.0p1-Preview",
+    "file": "OpenSSH-Win64.zip",
+    "url": "https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.4.0.0p1-Preview/OpenSSH-Win64.zip",
+    "algorithm": "SHA256",
+    "hash": "b67ff8becd203502190ec42ac7787c24c2cd3325ed7700485fe7a1c83d2a7957",
+    "source": "https://github.com/PowerShell/openssh-portable"
+  },
+  "webview2": {
+    "version": "Evergreen snapshot 2026-11-01",
+    "file": "MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "url": "https://msedge.sf.dl.delivery.mp.microsoft.com/filestreamingservice/files/d5cc3c1c-bb59-4158-aedc-db0035e44466/MicrosoftEdgeWebView2RuntimeInstallerX64.exe",
+    "algorithm": "SHA256",
+    "hash": "62863f0f0611a16ccf124b4f15650c3b66624504eba74d7cde1e2ae5d951249b",
+    "source": "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
+  },
+  "qemu": {
+    "version": "11.1.0",
+    "file": "qemu-w64-setup-20260811.exe",
+    "url": "https://qemu.weilnetz.de/w64/2026/qemu-w64-setup-20260811.exe",
+    "algorithm": "SHA512",
+    "hash": "5bcf9eed634e8575a37b74f445af41a2fe4106da512d0c30c368301d4c105037fdfab40a5287367a28a957624cddebbc8c07e16c88ab6634f554cdf3d16bf543",
+    "source": "https://repo.or.cz/qemu/ar7.git/commit/e470268ff446ec56728215a987ed166d5ed8fb64"
+  },
+  "qemuSource": {
+    "repository": "https://repo.or.cz/qemu/ar7.git",
+    "commit": "e470268ff446ec56728215a987ed166d5ed8fb64",
+    "prefix": "qemu-e470268ff446ec56728215a987ed166d5ed8fb64/",
+    "file": "qemu-e470268ff446ec56728215a987ed166d5ed8fb64-source.tar",
+    "hash": "b16ca2d09d66de17269f4b85d7823e82e8a42c591fc7b75047047170d095da03"
+  }
+}

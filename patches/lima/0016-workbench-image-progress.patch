@@ -1,0 +1,73 @@
+diff --git a/pkg/downloader/resume.go b/pkg/downloader/resume.go
+--- a/pkg/downloader/resume.go
++++ b/pkg/downloader/resume.go
+@@ -157,6 +157,17 @@
+ 	bar.Start()
+ 	defer bar.Finish()
+ 	reader := &downloadActivityReader{reader: resp.Body, timer: idle}
++	// The desktop workbench consumes complete lines when stderr is a pipe.
++	// Range responses count the bytes already present in the partial file.
++	if os.Getenv("CAGE_SETUP_PROGRESS") == "1" {
++		reader.received = offset
++		reader.total = total
++		reader.report = func(received, total int64) {
++			fmt.Fprintf(os.Stderr, "CAGE_IMAGE_BYTES %d %d\n", received, total)
++		}
++		reader.report(offset, total)
++		reader.lastReport = time.Now()
++	}
+ 	n, err := io.Copy(out, bar.NewProxyReader(reader))
+ 	if err != nil {
+ 		return true, err
+@@ -172,6 +183,10 @@
+ 	if total >= 0 && n+offset != total {
+ 		return true, io.ErrUnexpectedEOF
+ 	}
++	if reader.report != nil {
++		reader.report(reader.received, total)
++		fmt.Fprintln(os.Stderr, "CAGE_IMAGE_VERIFY")
++	}
+ 	if err := out.Sync(); err != nil {
+ 		return false, err
+ 	}
+@@ -186,14 +201,24 @@
+ }
+ 
+ type downloadActivityReader struct {
+-	reader io.Reader
+-	timer  *time.Timer
++	reader          io.Reader
++	timer           *time.Timer
++	received, total int64
++	report          func(int64, int64)
++	lastReport      time.Time
+ }
+ 
+ func (r *downloadActivityReader) Read(p []byte) (int, error) {
+ 	n, err := r.reader.Read(p)
+ 	if n > 0 {
+ 		r.timer.Reset(time.Minute)
++		if r.report != nil {
++			r.received += int64(n)
++			if time.Since(r.lastReport) >= time.Second {
++				r.report(r.received, r.total)
++				r.lastReport = time.Now()
++			}
++		}
+ 	}
+ 	return n, err
+ }
+diff --git a/pkg/instance/start.go b/pkg/instance/start.go
+index 489df5f..10b4d2f 100644
+--- a/pkg/instance/start.go
++++ b/pkg/instance/start.go
+@@ -183,6 +183,9 @@ func Prepare(ctx context.Context, inst *limatype.Instance, guestAgent string) (*
+ 		}
+ 	}
+ 
++	if os.Getenv("CAGE_SETUP_PROGRESS") == "1" {
++		fmt.Fprintln(os.Stderr, "CAGE_IMAGE_READY")
++	}
+ 	if err := limaDriver.CreateDisk(ctx); err != nil {
+ 		return nil, err
+ 	}

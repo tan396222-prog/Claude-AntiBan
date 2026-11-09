@@ -1,0 +1,153 @@
+Subject: [PATCH] Route cage TCP and DNS through host-owned transports
+
+Optional transport hooks retain the upstream default. DNS exchange failures
+return SERVFAIL without invoking the host resolver. Cage supplies a proxy-only
+TCP dialer and DoH exchange outside the guest.
+
+---
+diff --git a/pkg/services/dns/dns.go b/pkg/services/dns/dns.go
+index 968331a..3ee284a 100644
+--- a/pkg/services/dns/dns.go
++++ b/pkg/services/dns/dns.go
+@@ -24,6 +24,7 @@ type upstreamResolver interface {
+ }
+ 
+ type dnsHandler struct {
++	exchange  func(context.Context, *dns.Msg) (*dns.Msg, error)
+ 	zones     []types.Zone
+ 	zonesLock sync.RWMutex
+ 	upstream  upstreamResolver
+@@ -36,7 +37,16 @@ func (h *dnsHandler) handle(w dns.ResponseWriter, r *dns.Msg, responseMessageSiz
+ 	m := new(dns.Msg)
+ 	m.SetReply(r)
+ 	m.RecursionAvailable = true
+-	h.addAnswers(m)
++	if h.exchange != nil {
++		answer, err := h.exchange(context.Background(), r)
++		if err != nil {
++			m.SetRcode(r, dns.RcodeServerFailure)
++		} else {
++			m = answer
++		}
++	} else {
++		h.addAnswers(m)
++	}
+ 	edns0 := r.IsEdns0()
+ 	if edns0 != nil {
+ 		responseMessageSize = int(edns0.UDPSize())
+@@ -332,3 +342,8 @@ func (s *Server) addZone(req types.Zone) {
+ 	// No existing zone for req.Name, add new one
+ 	s.handler.zones = append(s.handler.zones, req)
+ }
++
++// SetExchange replaces all upstream DNS resolution; errors never fall back.
++func (s *Server) SetExchange(exchange func(context.Context, *dns.Msg) (*dns.Msg, error)) {
++	s.handler.exchange = exchange
++}
+diff --git a/pkg/services/forwarder/tcp.go b/pkg/services/forwarder/tcp.go
+index f6b78ba..b1d2219 100644
+--- a/pkg/services/forwarder/tcp.go
++++ b/pkg/services/forwarder/tcp.go
+@@ -19,7 +19,7 @@ import (
+ 
+ const linkLocalSubnet = "169.254.0.0/16"
+ 
+-func TCP(s *stack.Stack, nat map[tcpip.Address]tcpip.Address, natLock *sync.Mutex, ec2MetadataAccess bool, outbound types.Outbound) *tcp.Forwarder {
++func TCP(s *stack.Stack, nat map[tcpip.Address]tcpip.Address, natLock *sync.Mutex, ec2MetadataAccess bool, outbound types.Outbound, dialers ...types.DialContext) *tcp.Forwarder {
+ 	return tcp.NewForwarder(s, 0, 10, func(r *tcp.ForwarderRequest) {
+ 		localAddress := r.ID().LocalAddress
+ 
+@@ -37,7 +37,11 @@ func TCP(s *stack.Stack, nat map[tcpip.Address]tcpip.Address, natLock *sync.Mute
+ 			r.Complete(true)
+ 			return
+ 		}
+-		outbound, err := net.Dial("tcp", net.JoinHostPort(localAddress.String(), fmt.Sprint(r.ID().LocalPort)))
++		dial := (&net.Dialer{}).DialContext
++		if len(dialers) > 0 && dialers[0] != nil {
++			dial = dialers[0]
++		}
++		outbound, err := dial(context.Background(), "tcp", net.JoinHostPort(localAddress.String(), fmt.Sprint(r.ID().LocalPort)))
+ 		if err != nil {
+ 			log.Tracef("net.Dial() = %v", err)
+ 			r.Complete(true)
+diff --git a/pkg/types/configuration.go b/pkg/types/configuration.go
+index c5a2902..755a866 100644
+--- a/pkg/types/configuration.go
++++ b/pkg/types/configuration.go
+@@ -1,6 +1,8 @@
+ package types
+ 
+ import (
++	"context"
++	"github.com/miekg/dns"
+ 	"net"
+ 	"net/netip"
+ 	"regexp"
+@@ -15,7 +17,11 @@ func (o Outbound) Allows(network string, dst netip.AddrPort) bool {
+ 	return o == nil || o(network, dst)
+ }
+ 
++type DialContext func(context.Context, string, string) (net.Conn, error)
++
+ type Configuration struct {
++	DialContext DialContext                                       `yaml:"-"`
++	DNSExchange func(context.Context, *dns.Msg) (*dns.Msg, error) `yaml:"-"`
+ 	// Print packets on stderr
+ 	Debug bool `yaml:"debug,omitempty"`
+ 
+diff --git a/pkg/virtualnetwork/services.go b/pkg/virtualnetwork/services.go
+index 48f9e76..887bdab 100644
+--- a/pkg/virtualnetwork/services.go
++++ b/pkg/virtualnetwork/services.go
+@@ -24,7 +24,7 @@ func addServices(configuration *types.Configuration, s *stack.Stack, ipPool *tap
+ 	var natLock sync.Mutex
+ 	translation := parseNATTable(configuration)
+ 
+-	tcpForwarder := forwarder.TCP(s, translation, &natLock, configuration.Ec2MetadataAccess, configuration.Outbound)
++	tcpForwarder := forwarder.TCP(s, translation, &natLock, configuration.Ec2MetadataAccess, configuration.Outbound, configuration.DialContext)
+ 	s.SetTransportProtocolHandler(tcp.ProtocolNumber, tcpForwarder.HandlePacket)
+ 	udpForwarder := forwarder.UDP(s, translation, &natLock, configuration.Ec2MetadataAccess, configuration.Outbound)
+ 	s.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+@@ -83,6 +83,7 @@ func dnsServer(configuration *types.Configuration, s *stack.Stack) (http.Handler
+ 	}
+ 
+ 	server.SetPolicy(configuration.DNSNames, configuration.DNSAnswered)
++	server.SetExchange(configuration.DNSExchange)
+ 
+ 	go func() {
+ 		if err := server.Serve(); err != nil {
+diff --git a/pkg/services/dns/cage_test.go b/pkg/services/dns/cage_test.go
+new file mode 100644
+index 0000000..21ffa81
+--- /dev/null
++++ b/pkg/services/dns/cage_test.go
+@@ -0,0 +1,29 @@
++// SPDX-License-Identifier: Apache-2.0
++package dns
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/miekg/dns"
++)
++
++type cageWriter struct {
++	dns.ResponseWriter
++	msg *dns.Msg
++}
++
++func (w *cageWriter) WriteMsg(m *dns.Msg) error { w.msg = m; return nil }
++
++func TestCageDNSFailureDoesNotUseHostResolver(t *testing.T) {
++	q := new(dns.Msg)
++	q.SetQuestion("example.com.", dns.TypeA)
++	w := &cageWriter{}
++	// A nil upstream would panic if the ordinary resolver path were used.
++	h := &dnsHandler{exchange: func(context.Context, *dns.Msg) (*dns.Msg, error) { return nil, errors.New("proxy down") }}
++	h.handle(w, q, dns.MaxMsgSize)
++	if w.msg == nil || w.msg.Rcode != dns.RcodeServerFailure {
++		t.Fatal("expected fail-closed SERVFAIL")
++	}
++}

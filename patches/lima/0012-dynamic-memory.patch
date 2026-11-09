@@ -1,0 +1,378 @@
+diff --git a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
+index bf55ddb..2dba8c5 100644
+--- a/pkg/driver/qemu/qemu.go
++++ b/pkg/driver/qemu/qemu.go
+@@ -525,6 +525,10 @@ func Cmdline(ctx context.Context, cfg Config) (exe string, args []string, err er
+ 	}
+ 	memBytes = adjustMemBytesDarwinARM64HVF(memBytes, accel)
+ 	args = appendArgsIfNoConflict(args, "-m", strconv.Itoa(int(memBytes>>20)))
++	// A balloon returns guest pages to the host without restarting the VM.
++	if *y.OS == limatype.LINUX {
++		args = append(args, "-device", "virtio-balloon")
++	}
+ 
+ 	if *y.MountType == limatype.VIRTIOFS {
+ 		args = appendArgsIfNoConflict(args, "-object",
+diff --git a/pkg/hostagent/hostagent.go b/pkg/hostagent/hostagent.go
+index d1e8fa7..8b1fbc0 100644
+--- a/pkg/hostagent/hostagent.go
++++ b/pkg/hostagent/hostagent.go
+@@ -448,6 +448,9 @@ func (a *HostAgent) Run(ctx context.Context) error {
+ 	if err := a.driver.AdditionalSetupForSSH(ctx); err != nil {
+ 		return err
+ 	}
++	stopResources := a.startResourceManager(ctx)
++	defer stopResources()
++	a.cleanUp(func() error { stopResources(); return nil })
+ 
+ 	// WSL instance SSH address isn't known until after VM start
+ 	if a.driver.Info(ctx).Features.DynamicSSHAddress {
+diff --git a/pkg/driver/memory.go b/pkg/driver/memory.go
+new file mode 100644
+index 0000000..4fc8fbb
+--- /dev/null
++++ b/pkg/driver/memory.go
+@@ -0,0 +1,12 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package driver
++
++import "context"
++
++// MemoryBalloon adjusts guest memory within the configured boot capacity.
++// Acceptance is asynchronous; callers must observe the guest before reclaiming more.
++type MemoryBalloon interface {
++	SetMemoryTarget(context.Context, uint64) error
++}
+diff --git a/pkg/driver/qemu/memory.go b/pkg/driver/qemu/memory.go
+new file mode 100644
+index 0000000..cbd2ef6
+--- /dev/null
++++ b/pkg/driver/qemu/memory.go
+@@ -0,0 +1,81 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import (
++	"context"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"net"
++	"path/filepath"
++	"time"
++
++	"github.com/docker/go-units"
++	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
++)
++
++func (l *LimaQemuDriver) SetMemoryTarget(ctx context.Context, target uint64) error {
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	maximum, err := units.RAMInBytes(*l.Instance.Config.Memory)
++	if err != nil {
++		return err
++	}
++	if target < 512<<20 || target > uint64(maximum) || target%(1<<20) != 0 {
++		return errors.New("memory target is outside the VM capacity")
++	}
++	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
++	defer cancel()
++	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", filepath.Join(l.Instance.Dir, filenames.QMPSock))
++	if err != nil {
++		return err
++	}
++	defer conn.Close()
++	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
++	defer stop()
++	deadline, _ := ctx.Deadline()
++	if err := conn.SetDeadline(deadline); err != nil {
++		return err
++	}
++	decoder := json.NewDecoder(io.LimitReader(conn, 64<<10))
++	var greeting map[string]json.RawMessage
++	if err := decoder.Decode(&greeting); err != nil {
++		return err
++	}
++	if greeting["QMP"] == nil {
++		return errors.New("invalid QMP greeting")
++	}
++	encoder := json.NewEncoder(conn)
++	for i, command := range []string{"qmp_capabilities", "balloon"} {
++		request := map[string]any{"execute": command, "id": i + 1}
++		if command == "balloon" {
++			request["arguments"] = map[string]uint64{"value": target}
++		}
++		if err := encoder.Encode(request); err != nil {
++			return err
++		}
++		for {
++			var response struct {
++				ID    int `json:"id"`
++				Error *struct {
++					Class string `json:"class"`
++				} `json:"error"`
++			}
++			if err := decoder.Decode(&response); err != nil {
++				return err
++			}
++			if response.ID != i+1 {
++				continue
++			}
++			if response.Error != nil {
++				return fmt.Errorf("QMP memory adjustment failed: %s", response.Error.Class)
++			}
++			break
++		}
++	}
++	return nil
++}
+diff --git a/pkg/driver/qemu/memory_test.go b/pkg/driver/qemu/memory_test.go
+new file mode 100644
+index 0000000..97e13a7
+--- /dev/null
++++ b/pkg/driver/qemu/memory_test.go
+@@ -0,0 +1,89 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import (
++	"context"
++	"encoding/json"
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/lima-vm/lima/v2/pkg/limatype"
++	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
++)
++
++func TestMemoryTargetQMPProtocolAndCancellation(t *testing.T) {
++	for _, stall := range []bool{false, true} {
++		t.Run(map[bool]string{false: "command", true: "cancelled"}[stall], func(t *testing.T) {
++			dir, err := os.MkdirTemp("", "cqm-")
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer os.RemoveAll(dir)
++			memory := "4GiB"
++			l := &LimaQemuDriver{Instance: &limatype.Instance{Dir: dir, Config: &limatype.LimaYAML{Memory: &memory}}}
++			listener, err := net.Listen("unix", filepath.Join(dir, filenames.QMPSock))
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer listener.Close()
++			done := make(chan error, 1)
++			go func() {
++				conn, e := listener.Accept()
++				if e != nil {
++					done <- e
++					return
++				}
++				defer conn.Close()
++				_ = conn.SetDeadline(time.Now().Add(time.Second))
++				if stall {
++					var b [1]byte
++					_, e = conn.Read(b[:])
++					done <- e
++					return
++				}
++				enc, dec := json.NewEncoder(conn), json.NewDecoder(conn)
++				_ = enc.Encode(map[string]any{"QMP": map[string]any{}})
++				for i := 1; i <= 2; i++ {
++					var request struct {
++						ID        int    `json:"id"`
++						Execute   string `json:"execute"`
++						Arguments struct {
++							Value uint64 `json:"value"`
++						} `json:"arguments"`
++					}
++					if e = dec.Decode(&request); e != nil {
++						done <- e
++						return
++					}
++					if request.ID != i || (i == 1 && request.Execute != "qmp_capabilities") || (i == 2 && (request.Execute != "balloon" || request.Arguments.Value != 2<<30)) {
++						t.Error("wrong QMP request", request)
++					}
++					_ = enc.Encode(map[string]any{"event": "BALLOON_CHANGE"})
++					_ = enc.Encode(map[string]any{"id": i, "return": map[string]any{}})
++				}
++				done <- nil
++			}()
++			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
++			defer cancel()
++			started := time.Now()
++			err = l.SetMemoryTarget(ctx, 2<<30)
++			if (err != nil) != stall {
++				t.Fatal("unexpected command result", err)
++			}
++			if time.Since(started) > time.Second {
++				t.Fatal("deadline ignored")
++			}
++			if e := <-done; e != nil && !stall {
++				t.Fatal(e)
++			}
++			if err := l.SetMemoryTarget(context.Background(), 5<<30); err == nil {
++				t.Fatal("capacity exceeded")
++			}
++		})
++	}
++}
+diff --git a/pkg/driver/vz/memory_darwin.go b/pkg/driver/vz/memory_darwin.go
+new file mode 100644
+index 0000000..7f0c7e0
+--- /dev/null
++++ b/pkg/driver/vz/memory_darwin.go
+@@ -0,0 +1,43 @@
++//go:build darwin && !no_vz
++
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package vz
++
++import (
++	"context"
++	"errors"
++	"runtime"
++
++	"github.com/Code-Hex/vz/v3"
++	"github.com/docker/go-units"
++)
++
++func (l *LimaVzDriver) SetMemoryTarget(ctx context.Context, target uint64) error {
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	maximum, err := units.RAMInBytes(*l.Instance.Config.Memory)
++	if err != nil {
++		return err
++	}
++	if target < 512<<20 || target > uint64(maximum) || target%(1<<20) != 0 {
++		return errors.New("memory target is outside the VM capacity")
++	}
++	if l.machine == nil || l.machine.State() != vz.VirtualMachineStateRunning {
++		return errors.New("VM is not running")
++	}
++	for _, device := range l.machine.MemoryBalloonDevices() {
++		if balloon := vz.AsVirtioTraditionalMemoryBalloonDevice(device); balloon != nil {
++			// go-vz v3.7.1 wraps a borrowed NSArray member without retaining it,
++			// but installs a releasing finalizer. The VM owns this native device.
++			// Do not let temporary wrappers release the VM's reference.
++			runtime.SetFinalizer(balloon, nil)
++			balloon.SetTargetVirtualMachineMemorySize(target)
++			runtime.KeepAlive(l.machine)
++			return nil
++		}
++	}
++	return errors.New("memory balloon is unavailable")
++}
+diff --git a/pkg/hostagent/resources.go b/pkg/hostagent/resources.go
+new file mode 100644
+index 0000000..0fc1e79
+--- /dev/null
++++ b/pkg/hostagent/resources.go
+@@ -0,0 +1,59 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package hostagent
++
++import (
++	"context"
++	"errors"
++	"io"
++	"os/exec"
++	"strconv"
++	"sync"
++	"time"
++
++	"github.com/lima-vm/lima/v2/pkg/driver"
++	"github.com/lima-vm/lima/v2/pkg/limatype"
++)
++
++// ManageResources is an optional embedding hook. It starts after the driver and
++// stops before it. Guest observations use the existing private SSH transport.
++var ManageResources func(context.Context, string, *limatype.LimaYAML, driver.MemoryBalloon, func(context.Context, string) ([]byte, error)) func()
++
++func (a *HostAgent) startResourceManager(ctx context.Context) func() {
++	if ManageResources == nil {
++		return func() {}
++	}
++	d := a.driver
++	if configured, ok := d.(*driver.ConfiguredDriver); ok {
++		d = configured.Driver
++	}
++	balloon, ok := d.(driver.MemoryBalloon)
++	if !ok {
++		return func() {}
++	}
++	read := func(ctx context.Context, script string) ([]byte, error) {
++		args := append([]string{}, a.sshConfig.Args()...)
++		args = append(args, "-o", "ConnectTimeout=2", "-o", "ClearAllForwardings=yes", "-T", "-p", strconv.Itoa(a.sshLocalPort), a.instSSHAddress, "--", script)
++		cmd := exec.CommandContext(ctx, a.sshConfig.Binary(), args...)
++		hideResourceProbe(cmd)
++		cmd.WaitDelay = time.Second
++		pipe, err := cmd.StdoutPipe()
++		if err != nil {
++			return nil, err
++		}
++		if err = cmd.Start(); err != nil {
++			return nil, err
++		}
++		out, readErr := io.ReadAll(io.LimitReader(pipe, 16385))
++		if readErr != nil || len(out) > 16384 {
++			_ = cmd.Process.Kill()
++			_ = cmd.Wait()
++			return nil, errors.New("resource observation exceeded its limit")
++		}
++		return out, cmd.Wait()
++	}
++	stop := ManageResources(ctx, a.instDir, a.instConfig, balloon, read)
++	var once sync.Once
++	return func() { once.Do(stop) }
++}
+diff --git a/pkg/hostagent/resources_unix.go b/pkg/hostagent/resources_unix.go
+new file mode 100644
+index 0000000..7f2affb
+--- /dev/null
++++ b/pkg/hostagent/resources_unix.go
+@@ -0,0 +1,10 @@
++//go:build !windows
++
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package hostagent
++
++import "os/exec"
++
++func hideResourceProbe(*exec.Cmd) {}
+diff --git a/pkg/hostagent/resources_windows.go b/pkg/hostagent/resources_windows.go
+new file mode 100644
+index 0000000..e403dbe
+--- /dev/null
++++ b/pkg/hostagent/resources_windows.go
+@@ -0,0 +1,13 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package hostagent
++
++import (
++	"os/exec"
++	"syscall"
++)
++
++func hideResourceProbe(cmd *exec.Cmd) {
++	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
++}

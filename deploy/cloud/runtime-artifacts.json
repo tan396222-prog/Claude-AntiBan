@@ -1,0 +1,16 @@
+{
+  "platform": "linux-amd64",
+  "dockerVersion": "29.9.1",
+  "artifacts": [
+    {
+      "file": "docker-29.9.1.tgz",
+      "url": "https://download.docker.com/linux/static/stable/x86_64/docker-29.9.1.tgz",
+      "sha256": "c158ecc55adb3afb01bbd3539ed3b997d20c26dbdc418080506cc1bf5243ff57"
+    },
+    {
+      "file": "docker-rootless-extras-29.9.1.tgz",
+      "url": "https://download.docker.com/linux/static/stable/x86_64/docker-rootless-extras-29.9.1.tgz",
+      "sha256": "c87668896a3fced2e715324e9fb6a0634aba3e5d8408a471f6bc23dc476662af"
+    }
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "version": "0.1.6-alpha-preview",
+  "releaseURL": "https://github.com/Lee-xeo/Claude-Cage/releases/tag/v0.1.6-alpha-preview",
+  "downloadURL": "https://github.com/Lee-xeo/Claude-Cage/releases/download/v0.1.6-alpha-preview/Cage-0.1.6-alpha-preview-macos-arm64.dmg",
+  "linuxDownloadURL": "https://github.com/Lee-xeo/Claude-Cage/releases/download/v0.1.6-alpha-preview/Cage-0.1.6-alpha-preview-linux-amd64.deb",
+  "windowsPreview": {
+    "version": "0.1.6-alpha-preview",
+    "releaseURL": "https://github.com/Lee-xeo/Claude-Cage/releases/tag/v0.1.6-alpha-preview",
+    "downloadURL": "https://github.com/Lee-xeo/Claude-Cage/releases/download/v0.1.6-alpha-preview/Cage-0.1.6-alpha-preview-windows-amd64-setup-unsigned.exe"
+  }
+}

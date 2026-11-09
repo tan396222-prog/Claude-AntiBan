@@ -1,0 +1,132 @@
+---
+import '@fontsource-variable/inter';
+import '../styles/cage.css';
+import { cageCopy, languages, type CageLocale } from '../i18n/cage';
+import releaseData from '../data/release.json';
+import art from '../../../assets/claude-cage-character.png';
+import checks from '../../../assets/network-checks.png';
+import communityCheck from '../../../assets/community-browser-check.png';
+import qr from '../../../assets/community-qq.png';
+interface Props { locale: CageLocale }
+const { locale } = Astro.props;
+const c = cageCopy[locale];
+type PlatformRelease = { version: string; releaseURL: string; downloadURL: string };
+const published: PlatformRelease & { windowsDownloadURL?: string; linuxDownloadURL?: string; windowsPreview?: PlatformRelease } = releaseData;
+const base = import.meta.env.BASE_URL;
+const repo = 'https://github.com/Lee-xeo/Claude-Cage';
+const guideLabels: Record<CageLocale, string> = {
+  zh: '使用文档', 'zh-TW': '使用文件 · 中文', ru: 'Документация · 中文', ar: 'الدليل · 中文', fa: 'راهنما · 中文',
+  ko: '사용 문서 · 中文', es: 'Documentación · 中文', my: 'လမ်းညွှန် · 中文', be: 'Дакументацыя · 中文',
+  ps: 'لارښود · 中文', prs: 'راهنما · 中文', am: 'መመሪያ · 中文', so: 'Hagaha · 中文', ti: 'መምርሒ · 中文', fr: 'Documentation · 中文',
+};
+const guideLabel = guideLabels[locale];
+const docHref = (href: string) => href.replace('https://lee-xeo.github.io/Claude-Cage/docs/', `${base}docs/`);
+const platforms = [
+  { name: 'macOS', icon: 'apple', requirements: 'Apple Silicon · macOS 14+', format: '.dmg',
+    url: published.downloadURL, version: published.version, notes: published.releaseURL, guide: 'getting-started.md' },
+  { name: 'Windows', icon: 'windows', requirements: 'Windows 10 22H2 / 11 · x64', format: '.exe',
+    url: published.windowsDownloadURL || published.windowsPreview?.downloadURL,
+    version: published.windowsDownloadURL ? published.version : published.windowsPreview?.version,
+    preview: !published.windowsDownloadURL && !!published.windowsPreview,
+    notes: published.windowsDownloadURL ? published.releaseURL : published.windowsPreview?.releaseURL, guide: 'windows.md' },
+  { name: 'Linux', icon: 'linux', requirements: 'Debian 12 / Ubuntu 24.04 · x86_64', format: '.deb',
+    url: published.linuxDownloadURL,
+    version: published.linuxDownloadURL ? published.version : undefined,
+    notes: published.linuxDownloadURL ? published.releaseURL : undefined, guide: 'linux.md' },
+];
+const pathFor = (code: CageLocale) => `${base}${code === 'zh' ? '' : `${code}/`}`;
+const canonical = new URL(pathFor(locale), Astro.site);
+---
+<!doctype html>
+<html lang={c.lang} dir={c.dir}>
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content={c.description} />
+  <meta name="theme-color" content="#faf8f4" />
+  <title>{c.title}</title>
+  <link rel="canonical" href={canonical} />
+  {languages.map(l => <link rel="alternate" hreflang={l.lang} href={new URL(pathFor(l.code), Astro.site)} />)}
+  <link rel="alternate" hreflang="x-default" href={new URL(base, Astro.site)} />
+  <link rel="icon" href={`${base}cage-icon.png`} />
+  <meta property="og:type" content="website" /><meta property="og:site_name" content="Claude Cage" />
+  <meta property="og:title" content={c.title} /><meta property="og:description" content={c.description} />
+  <meta property="og:url" content={canonical} /><meta property="og:image" content={new URL(art.src, Astro.site)} />
+</head>
+<body>
+  <header class="nav wrap">
+    <a class="brand" href={pathFor(locale)} aria-label={c.home}><img src={`${base}cage-icon.png`} width="40" height="40" alt="" /><span>Claude Cage</span></a>
+    <nav><a class="nav-guide" href={`${base}docs/`}>{guideLabel}</a><a href="#how">{c.start}</a><a href={repo}>GitHub ↗</a><a class="nav-download" href="#download" data-download-open aria-haspopup="dialog">{c.downloadLabel} ↓</a></nav>
+  </header>
+  <div class="language-switch wrap">
+    <span id="language-label">{c.languageLabel}</span>
+    <details id="site-language" class="language-picker">
+      <summary aria-labelledby="language-label current-language">
+        <bdi id="current-language">{languages.find(l => l.code === locale)?.name}</bdi>
+        <span class="language-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <nav class="language-options" aria-labelledby="language-label">
+        {languages.map(l => <a href={pathFor(l.code)} lang={l.lang} dir={l.dir} aria-current={l.code === locale ? 'page' : undefined}>{l.name}</a>)}
+      </nav>
+    </details>
+  </div>
+  <main id="main">
+    <section class="story-hero wrap">
+      <div class="story-copy"><span class="eyebrow"><span class="seed"></span>CLAUDE CAGE · v{published.version}</span><h1>{c.hero}{c.heroAccent && <><br /><em>{c.heroAccent}</em></>}</h1><p class="tagline">{c.tagline}</p><p class="hero-intro">{c.intro}</p><a class="button" href="#download" data-download-open aria-haspopup="dialog">{c.downloadLabel} ↓</a><span class="requirements" dir="ltr">{c.requirements}</span></div>
+      <figure class="character"><img src={art.src} width={art.width} height={art.height} alt={c.artAlt} fetchpriority="high" /></figure>
+    </section>
+    <section class="manifesto wrap"><h2>{c.why}</h2><p>{c.whyText}</p><ul class="key-features">{c.keyFeatures.map(text => <li>{text}</li>)}</ul><p class="small-note">{c.whyNote}</p></section>
+    <section class="tools wrap" aria-labelledby="tools-title"><div class="section-intro"><h2 id="tools-title">{c.featureTitle}</h2></div><div class="tool-list">{c.features.map(([title,text],i) => <article><span class="tool-icon" aria-hidden="true">{['>_','↔','◎','↗','@','▣','☁'][i] || '↗'}</span><div><h3>{title}</h3><p>{text}</p></div></article>)}</div><a class="text-link feature-guide" href={`${base}docs/`}>{guideLabel} →</a></section>
+    <div class="wrap"><figure class="product"><div class="window-bar" dir="ltr"><span class="window-dots" aria-hidden="true">● ● ●</span><span>Claude Cage</span><span class="window-label">macOS</span></div><img src={`${base}workbench-2026-11.jpg`} width="1440" height="900" alt={c.workbench} loading="lazy" /><figcaption>{c.workbench}</figcaption></figure></div>
+    <section class="evidence wrap"><h2>{c.evidenceTitle}</h2><div class="evidence-grid"><figure><a href={checks.src}><img src={checks.src} width={checks.width} height={checks.height} alt={c.checksLabel} loading="lazy" /></a><figcaption>{c.checksLabel}</figcaption></figure><figure><a href={communityCheck.src}><img src={communityCheck.src} width={communityCheck.width} height={communityCheck.height} alt={c.communityCheckLabel} loading="lazy" /></a><figcaption>{c.communityCheckLabel}</figcaption></figure></div><p class="small-note">{c.evidenceNote}</p></section>
+    <section id="how" class="start-section"><div class="wrap"><div class="quick-start"><h2>{c.quickTitle}</h2><p>{c.quickText}</p><pre><code>{c.prompt}</code></pre><p class="small-note">{c.quickNote}</p></div><div class="section-heading"><h2 class="steps-title">{c.stepsTitle}</h2></div><div class="steps">{c.steps.map(([title,text],i)=><article><span class="step-number" dir="ltr">0{i+1}</span><h3>{title}</h3><p>{text}</p></article>)}</div><details class="first-look"><summary>{c.firstLookLabel}<span aria-hidden="true">＋</span></summary><img src={`${base}first-run-2026-11.jpg`} width="1440" height="900" alt={c.firstLookLabel} loading="lazy" /></details></div></section>
+    <section id="boundaries" class="boundaries wrap"><h2>{c.boundaryTitle}</h2><div class="boundary-list">{c.boundaries.map(([title,text])=><article><span aria-hidden="true">↔</span><div>{title && <h3>{title}</h3>}<p>{text}</p></div></article>)}</div></section>
+    <section id="download" class="download-section wrap"><div class="download-box"><img src={`${base}cage-icon.png`} width="84" height="84" alt="" /><span class="eyebrow">CLAUDE CAGE · ALPHA</span><h2>{c.downloadTitle}</h2><p>{c.downloadText}</p><a class="button" href="#download" data-download-open aria-haspopup="dialog">{c.downloadLabel} ↓</a><div class="download-meta" dir="ltr"><span>macOS</span><span>Windows</span><span>Linux</span></div><p class="access-note">{c.downloadNote}</p><p class="access-note update-note">{c.updateNote}</p><a class="text-link" href={published.releaseURL}>{c.releaseNotesLabel} ↗</a><noscript><p>{platforms.map(platform => <a class="text-link" href={platform.url || `${repo}/blob/main/docs/${platform.guide}`}>{platform.name}{platform.preview ? ` · ${c.unsignedLabel}` : ''} ↗ </a>)}</p></noscript></div></section>
+    <section class="community-docs wrap" aria-labelledby="docs-title"><h2 id="docs-title">{c.docsTitle}</h2><div class="docs-body"><div class="docs-content"><a class="text-link guide-entry" href={`${base}docs/`}>{guideLabel} →</a><p class="community-intro">{c.communityText}</p><div class="community-links"><a class="text-link" href={`${repo}/issues`}>{c.issuesLabel} ↗</a><a class="text-link" href={repo}>GitHub ↗</a></div><ul class="doc-links">{c.docs.map(doc => <li><a class="text-link" href={docHref(doc.href)}>{doc.label} ↗</a><p>{doc.title}</p></li>)}</ul></div><figure class="community-qr"><a href={qr.src}><img src={qr.src} width={qr.width} height={qr.height} alt={c.group} loading="lazy" /></a><figcaption dir="ltr">{c.group}</figcaption></figure></div></section>
+
+    <section class="license wrap"><h2>{c.licenseTitle}</h2><p>{c.licenseText}</p></section>
+  </main>
+  <footer class="wrap"><a class="brand" href={pathFor(locale)}><img src={`${base}cage-icon.png`} width="28" height="28" alt="" />Claude Cage</a><div><a href={`${base}docs/`}>{guideLabel}</a><a href={repo}>GitHub ↗</a><a href={`${repo}/blob/main/${locale === 'zh' ? 'README.md' : `README.${locale}.md`}`}>README ↗</a></div><small>{c.independent}</small></footer>
+  <dialog class="download-dialog" aria-labelledby="platform-title">
+    <div class="dialog-heading"><h2 id="platform-title">{c.platformLabel}</h2><form method="dialog"><button class="dialog-close" aria-label={c.closeLabel}>×</button></form></div>
+    <div class="platform-options">{platforms.map(platform => <article class="platform-option" data-platform={platform.name}>
+      <div class="platform-heading"><span class="platform-icon" aria-hidden="true"><img src={`${base}platforms/${platform.icon}.svg`} width="32" height="32" alt="" /></span><h3 dir="ltr">{platform.name}</h3></div><p class="platform-requirements" dir="ltr">{platform.requirements}</p>
+      <p class="platform-status"><bdi>{platform.preview ? c.unsignedLabel : platform.url ? platform.format : c.unavailableLabel}</bdi>{platform.version && <bdi dir="ltr"> · v{platform.version}</bdi>}</p>
+      <a class="button" href={platform.url || `${repo}/blob/main/docs/${platform.guide}`}>{platform.url ? c.downloadLabel : c.installGuideLabel} ↗</a>
+      {platform.notes && <a class="text-link" href={platform.notes}>{c.releaseNotesLabel} ↗</a>}
+      {platform.url && <a class="text-link" href={`${repo}/blob/main/docs/${platform.guide}`}>{c.installGuideLabel} ↗</a>}
+    </article>)}</div>
+  </dialog>
+  <script>
+    const language = document.querySelector<HTMLDetailsElement>('#site-language');
+    language?.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && language.open) {
+        event.preventDefault();
+        language.open = false;
+        language.querySelector('summary')?.focus();
+      }
+    });
+    document.addEventListener('click', event => {
+      if (language && event.target instanceof Node && !language.contains(event.target)) language.open = false;
+    });
+    const downloads = document.querySelector<HTMLDialogElement>('.download-dialog');
+    document.querySelectorAll<HTMLAnchorElement>('[data-download-open]').forEach(link => {
+      link.addEventListener('click', event => {
+        if (!downloads) return;
+        event.preventDefault();
+        downloads.showModal();
+      });
+    });
+    downloads?.addEventListener('click', event => {
+      if (event.target !== downloads) return;
+      const bounds = downloads.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) downloads.close();
+    });
+    const openDownloadHash = () => {
+      if (window.location.hash === '#download' && downloads && !downloads.open) downloads.showModal();
+    };
+    window.addEventListener('hashchange', openDownloadHash);
+    openDownloadHash();
+  </script>
+</body>
+</html>

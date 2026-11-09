@@ -1,0 +1,17 @@
+[Unit]
+Description=Cage cloud control service
+Requires=cage-container-engine.service
+After=cage-container-engine.service
+
+[Service]
+Environment=CLAUDE_CAGE_CONFIG=%h/.claude-cage/config.json
+Environment=PATH=%h/.local/lib/cage:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WorkingDirectory=%h
+ExecStart=%h/.local/lib/cage/cage serve
+KillMode=mixed
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

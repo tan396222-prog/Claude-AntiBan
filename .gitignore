@@ -1,0 +1,36 @@
+.DS_Store
+.claude
+node_modules
+dist
+/_output
+# Scratch checkouts and patch files for working on patches/. third_party/
+# holds what is built.
+/lima/
+/lima-pr/
+/tmp/
+/sshocker-append-fix.patch
+# Built by the Makefile, embedded in the binary.
+/internal/limaembed/assets/*
+!/internal/limaembed/assets/README
+/ui/.generated/
+/internal/workbench/web/*
+!/internal/workbench/web/README
+# Local acceptance artifacts may contain host paths, node addresses and sessions.
+/docs/test-reports/
+/docs/plans/
+.env
+.env.*
+!.env.example
+*.p8
+*.p12
+*.keychain-db
+/promo/out/
+
+# Local diagnostics and UI design/acceptance workspaces. Public media lives in promo/.
+/output/
+/ui/.oil-ui/
+/ui/_output/
+
+# Rendered promo export; reproducible source and assets are in promo/.
+/claude-cage-promo.mp4
+/.vite/

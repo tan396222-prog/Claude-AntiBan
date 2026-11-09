@@ -1,0 +1,50 @@
+.setup-progress {
+  margin: 24px auto 0;
+  padding: 20px 24px 16px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  text-align: left;
+  min-width: 0;
+}
+.setup-stages {
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
+  margin: 0; padding: 0; list-style: none;
+}
+.setup-stages li {
+  border-top: 3px solid var(--line); padding-top: 8px;
+  font-size: .8571rem; line-height: 1.4; color: var(--muted);
+}
+.setup-stages li[aria-current="step"] { color: var(--strong); font-weight: 600; border-color: var(--accent); }
+.setup-transfer { margin: 28px 0 20px; }
+.setup-transfer-heading { display: flex; align-items: center; gap: 12px; }
+.setup-transfer-icon {
+  width: 36px; height: 36px; display: grid; place-items: center; flex: none;
+  border-radius: 10px; color: var(--accent); background: var(--chrome);
+}
+.setup-transfer-description { flex: 1; min-width: 0; }
+.setup-transfer-description h2 {
+  font-size: 1.1429rem; font-weight: 600; line-height: 1.5; color: var(--strong);
+  margin: 0; overflow-wrap: anywhere;
+}
+.setup-transfer-bytes { font-size: .8571rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.setup-transfer-number { font-size: 1.7143rem; font-weight: 600; color: var(--strong); font-variant-numeric: tabular-nums; }
+.setup-transfer-number small { font-size: .9286rem; padding-left: 2px; }
+.setup-meter { height: 6px; overflow: hidden; margin-top: 16px; border-radius: 8px; background: var(--chrome-dark); }
+.setup-meter span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .25s ease-out; }
+.setup-meter-active span { width: 28%; animation: setup-meter-scan 1.8s ease-in-out infinite alternate; }
+@keyframes setup-meter-scan { from { transform: translateX(0); } to { transform: translateX(257%); } }
+.setup-transfer-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.setup-transfer-actions button { font-size: .8571rem; }
+.setup-transfer-error { color: var(--danger); font-size: .9286rem; line-height: 1.6; overflow-wrap: anywhere; margin: 12px 0 0; }
+.setup-transfer-hint { color: var(--muted); font-size: .8571rem; line-height: 1.6; margin: 8px 0 0; }
+@media (prefers-reduced-motion: reduce) {
+  .setup-meter span { animation: none; transition: none; }
+  .setup-meter-active { background: repeating-linear-gradient(110deg,var(--chrome-dark) 0 6px,var(--line) 6px 12px); }
+  .setup-meter-active span { display: none; }
+}
+@media (max-width: 600px) {
+  .setup-progress { padding: 16px; }
+  .setup-transfer-heading { gap: 8px; }
+  .setup-transfer-icon { width: 28px; height: 28px; }
+}

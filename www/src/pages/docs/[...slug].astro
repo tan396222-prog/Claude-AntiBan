@@ -1,0 +1,103 @@
+---
+import '@fontsource-variable/inter';
+import '../../styles/cage.css';
+import '../../styles/guide.css';
+import { guidePages, guideGroups, guideURL, guideHTML } from '../../lib/guide';
+export function getStaticPaths() {
+  return guidePages.map(page => ({ params: { slug: page.slug === 'index' ? undefined : page.slug }, props: { page } }));
+}
+const { page } = Astro.props;
+const base = import.meta.env.BASE_URL;
+const index = guidePages.findIndex(item => item.slug === page.slug);
+const previous = guidePages[index - 1];
+const next = guidePages[index + 1];
+const headings = page.content.getHeadings().filter(heading => heading.depth === 2);
+const html = guideHTML(await page.content.compiledContent());
+const search = guidePages.map(item => ({ title: item.title, description: item.description, url: guideURL(item.slug), text: `${item.keywords || ''} ${item.content.rawContent()}` }));
+const canonical = new URL(guideURL(page.slug), Astro.site);
+---
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content={page.description} />
+  <meta name="theme-color" content="#faf8f4" />
+  <title>{page.title} · Cage 使用文档</title>
+  <link rel="canonical" href={canonical} />
+  <link rel="icon" href={`${base}cage-icon.png`} />
+</head>
+<body class="guide-page">
+  <a class="skip-link" href="#article">跳到正文</a>
+  <header class="nav wrap guide-header">
+    <a class="brand" href={base}><img src={`${base}cage-icon.png`} width="36" height="36" alt="" /><span>Claude Cage</span></a>
+    <nav aria-label="网站导航"><a href={base}>官网首页</a><a href={guideURL('index')} aria-current="page">使用文档</a><a class="nav-download" href={`${base}#download`}>下载应用 ↓</a></nav>
+  </header>
+  <div class="guide-shell wrap">
+    <aside class="guide-sidebar" aria-label="文档导航">
+      <a class="guide-home" href={guideURL('index')}>使用文档</a>
+      <div class="guide-search" hidden>
+        <label for="guide-search">搜索文档</label>
+        <div class="search-field"><span aria-hidden="true">⌕</span><input id="guide-search" type="search" placeholder="试试：多账号、手机、断网" autocomplete="off" aria-controls="search-results" /><button type="button" id="clear-search" aria-label="清空搜索" hidden>×</button></div>
+      </div>
+      <details class="guide-mobile-menu">
+        <summary>浏览文档目录 <span aria-hidden="true">⌄</span></summary>
+        <nav aria-label="手机文档目录">{guideGroups.map(group => <section><h2>{group}</h2>{guidePages.filter(item => item.group === group).map(item => <a href={guideURL(item.slug)} aria-current={item.slug === page.slug ? 'page' : undefined}>{item.title}</a>)}</section>)}</nav>
+      </details>
+      <nav class="guide-desktop-menu" aria-label="全部章节">{guideGroups.map(group => <section><h2>{group}</h2>{guidePages.filter(item => item.group === group).map(item => <a href={guideURL(item.slug)} aria-current={item.slug === page.slug ? 'page' : undefined}>{item.title}</a>)}</section>)}</nav>
+      <p class="guide-sidebar-note">覆盖桌面版与开发中的远程能力。<br />功能是否可用，请结合所用版本。</p>
+    </aside>
+    <main id="article" class="guide-main" tabindex="-1">
+      <section id="search-results" class="guide-results" aria-labelledby="search-title" hidden><div class="search-heading"><h2 id="search-title">搜索结果</h2><button id="close-search" type="button">返回正文</button></div><p id="search-status" role="status" aria-live="polite"></p><ul id="search-list"></ul></section>
+      <article id="guide-article">
+        <div class="guide-breadcrumb"><a href={guideURL('index')}>使用文档</a><span aria-hidden="true">/</span><span>{page.group}</span></div>
+        <header class="guide-title"><span class="eyebrow">CAGE · 使用手册</span><h1>{page.title}</h1><p>{page.description}</p></header>
+        {headings.length > 0 && <details class="article-outline" open><summary>本页内容 <span aria-hidden="true">⌄</span></summary><nav aria-label="本页目录">{headings.map(heading => <a href={`#${heading.slug}`}>{heading.text}</a>)}</nav></details>}
+        <div class="guide-prose" set:html={html} />
+        <nav class="guide-pagination" aria-label="前后章节">{previous ? <a href={guideURL(previous.slug)}><span>← 上一篇</span><strong>{previous.title}</strong></a> : <span />}{next && <a href={guideURL(next.slug)}><span>下一篇 →</span><strong>{next.title}</strong></a>}</nav>
+        <div class="guide-feedback"><p>没有解决你的问题？附上版本、系统与错误原文，帮助我们定位。</p><a href="https://github.com/Lee-xeo/Claude-Cage/issues">反馈问题 ↗</a><a href={`https://github.com/Lee-xeo/Claude-Cage/blob/main/docs/guide/${page.slug}.md`}>查看文档源码 ↗</a></div>
+      </article>
+    </main>
+  </div>
+  <footer class="wrap guide-footer"><a href={base}>Claude Cage</a><small>独立社区项目，与 Anthropic 无隶属关系。</small><a href="#article">回到正文 ↑</a></footer>
+  <script id="guide-search-data" type="application/json" set:html={JSON.stringify(search).replaceAll('<', '\\u003c')} />
+  <script>
+    type SearchPage = { title: string; description: string; url: string; text: string };
+    const searchData: SearchPage[] = JSON.parse(document.querySelector('#guide-search-data')!.textContent!);
+    const input = document.querySelector<HTMLInputElement>('#guide-search')!;
+    const results = document.querySelector<HTMLElement>('#search-results')!;
+    const article = document.querySelector<HTMLElement>('#guide-article')!;
+    const list = document.querySelector<HTMLUListElement>('#search-list')!;
+    const status = document.querySelector<HTMLElement>('#search-status')!;
+    const clear = document.querySelector<HTMLButtonElement>('#clear-search')!;
+    const normalize = (value: string) => value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+    const indexed = searchData.map(page => ({ ...page, haystack: normalize(`${page.title} ${page.description} ${page.text}`) }));
+    function search() {
+      const query = normalize(input.value);
+      results.hidden = !query;
+      article.hidden = !!query;
+      clear.hidden = !query;
+      list.replaceChildren();
+      if (!query) return;
+      const tokens = query.split(' ');
+      const found = indexed.filter(page => tokens.every(token => page.haystack.includes(token))).sort((a, b) => Number(normalize(b.title).includes(query)) - Number(normalize(a.title).includes(query)));
+      status.textContent = found.length ? `找到 ${found.length} 篇文档` : '没有找到相关文档。请换个关键词，或清空搜索后浏览目录。';
+      for (const page of found) {
+        const item = document.createElement('li');
+        const link = document.createElement('a'); link.href = page.url; link.textContent = page.title;
+        const summary = document.createElement('p'); summary.textContent = page.description;
+        item.append(link, summary); list.append(item);
+      }
+    }
+    function reset() { input.value = ''; search(); input.focus(); }
+    document.querySelector<HTMLElement>('.guide-search')!.hidden = false;
+    input.addEventListener('input', search);
+    input.addEventListener('keydown', event => { if (event.key === 'Escape') { event.preventDefault(); reset(); } });
+    clear.addEventListener('click', reset);
+    document.querySelector('#close-search')!.addEventListener('click', reset);
+    document.querySelectorAll<HTMLDetailsElement>('.guide-mobile-menu, .article-outline').forEach(menu => menu.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && menu.open) { event.preventDefault(); menu.open = false; menu.querySelector('summary')!.focus(); }
+    }));
+  </script>
+</body>
+</html>

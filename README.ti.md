@@ -1,0 +1,129 @@
+<div align="center">
+
+<h1>Claude 防封</h1>
+
+**ሚስ ክላውድ ኣብ ጓጓ ኣቐምጥዋ፡ ምእንቲ ብሓባር ዘለና ግዜ ብዝበለጸ ክንከላኸለሉ ንኽእል**
+
+<img src="assets/claude-cage-character.png" alt="Claude 防封" width="320" />
+
+[![Release](https://img.shields.io/github/v/release/tan396222-prog/Claude-AntiBan?include_prereleases)](https://github.com/tan396222-prog/Claude-AntiBan/releases) [![CI](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+**[መርበብ ሓበሬታ ፕሮጀክት](https://github.com/tan396222-prog/Claude-AntiBan) · [Français](https://github.com/tan396222-prog/Claude-AntiBan) · [ነቲ መተግበሪ ኣውርድ](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [ምጅማር](docs/getting-started.md) · [FAQ](docs/troubleshooting.md) · [ኣበርክቶ ግበሩ](CONTRIBUTING.md) · [መምርሒ ኣጠቓቕማ (ብቻይንኛ)](docs/README.md)**
+
+[简体中文](README.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [한국어](README.ko.md) · [Español](README.es.md) · [မြန်မာဘာသာ](README.my.md) · [Беларуская](README.be.md) · [پښتو](README.ps.md) · [دری](README.prs.md) · [አማርኛ](README.am.md) · [Soomaali](README.so.md) · [ትግርኛ](README.ti.md) · [Français](README.fr.md)
+
+</div>
+
+## ብAnthropic ተሰላቺና
+
+ከም ተራ ተጠቀምቲ ምስ ክላውድ ጥራይ ክንዛረብን ክንተሓባበርን እንደሊ፡ ብዛዕባ እገዳ ኣካውንትን ፋይናንሳዊ ክሳራን እናተጨነቕና፡ ንVPS instances፡ ናይ መርበብ ሓበሬታ ኣሰር ኣጻብዕቲ ፕሮፋይላት፡ ከምኡ’ውን ናይ ከባቢ ምፍታሽ ምውቃር ደኺምና ኣለና። ነቕርብ **Claude 防封** — **ንኣጠቓቕማ ድሉው ዝኾነ ናይ ዴስክቶፕ መተግበሪ: ናይ ገዛእ ርእስኻ ናይ መርበብ ፕሮክሲ ምውቃርን ነቲ ዝተነጸለ ከባቢኻ፣ ናይ ሰዓት ዞባኻ፣ ቋንቋኻን ከባብያኻ ምፍታሽ ኣብ ሓደ ቦታ ኣመሓድርን።**
+
+ክላውድ Cage ቀሊል ክብደት ዘለዎ ናይ ሊኑክስ ቨርቹዋል ማሽን ኮይኑ ንሓደ ናይ ሊኑክስ ተርሚናል፣ ብራውዘርን ፋይል ኤዲተርን ኣብ ሓደ ናይ ዴስክቶፕ ኣፕሊኬሽን ዘወሃህድ እዩ። ቀንዲ መለለዪታቱ ድማ፤
+
+- ካብቲ ኣአንጋዲ ዝተነጸሉ ቅጥዕታት መርበብ፤ Cage ንኹሉ ኣብ ውሽጢ ከባቢኡ ዝርከብ ትራፊክ መርበብ ብናይ ገዛእ ርእሱ ኔትወርክ ፕሮክሲ የመሓላልፎ
+- ካብቲ ኣአንጋዲ ዝተነጸለ ቅጥዕታት ኣሰር ኣጻብዕቲ መርበብ ሓበሬታ፡ ዞባ ሰዓትን ቋንቋን ሓዊሱ፡ ምስ ኣውቶማቲክ ምትእስሳር ናብቲ ናይ መርበብ ፕሮክሲ IP ቦታ
+- ውህደት ኣብ ምሉእ ዋሕዚ ስራሕ ክላውድ: ምእታው መርበብ ሓበሬታ፣ ፍቓድ ኣካውንት፣ ከምኡ’ውን መስርሕ ኮድ ክላውድ
+- ኣብ ውሽጡ ዝተሃንጸ ኔትወርክን ተነጽሎን ምፍታሽ ወሳኒ ምፍታሽ ኣብ ዝፈሽለሉ ወይ መርትዖታት ኣብ ዘይተማልአሉ እዋን ንመእተዊ ኢንተርነት ደው የብሎ፤ ናይ ማሕበረሰብን ሳልሳይ ወገንን ምፍታሽ ተወሳኺ መወከሲ ሓበሬታ ይህብ
+
+**ውጽኢት ምፍታሽ ከባቢ ምስ Cage፤**
+
+| መርመራ መርበብን ምፍላይን | ናይ ማሕበረሰብ መርመራ መርበብ መዳህሰሲ |
+| :---: | :---: |
+| <a href="assets/network-checks.png"><img src="assets/network-checks.png" alt="መርመራ መርበብን ምፍላይን" width="400" /></a> | <a href="assets/community-browser-check.png"><img src="assets/community-browser-check-cropped.png" alt="ናይ ማሕበረሰብ መርመራ መርበብ መዳህሰሲ" width="400" /></a> |
+
+**ቀንዲ መተሓላለፊ Cage፤**
+
+![Cage](www/public/workbench-2026-11.jpg)
+
+## ብCage እንታይ ክትገብር ትኽእል
+
+- **ኣብ ሓደ መስኮት ስራሕ።** ኣብቲ ተርሚናል ክላውድ ኮድ ኣካይድ፣ ኣብ ኤዲተር ለውጢ ዳግም፣ ከምኡ’ውን ኣገልግሎታት ቅድመ-ምርኢትን ንምእታውን ንCage ዳህሳሲ ተጠቐም።
+- **ነቲ እተካፍሎ ተቖጻጸሮ።** እቲ ነባሪ ናይ ስራሕ ቦታን ብግልጺ ዝተኸፍቱ ናይ ፕሮጀክት ማህደርን ጥራይ እዮም ዝካፈሉ። ናይቲ ኣአንጋዲ ናይ Claude መእተዊ ኩነታት፣ ናይ መርበብ ሓበሬታ ፕሮፋይላትን SSH መፍትሕታትን ብኣውቶማቲክ ኣይኣትዉን እዮም።
+- **ኩነታት መርበብካ ርአ።** ኣብ ውሽጢ ዝተሃንጸ ምሕደራ ፕሮክሲ መርበብ ምዝገባታት ከተእቱ፣ መወዳእታ ነጥብታት ክትመርጽን መውጽኢ IP ክትምርምርን የኽእለካ። እቲ ከባቢ ክሳብ ወሳኒ ምፍታሽ ዝሓልፍ ካብ መስመር ወጻኢ ይጸንሕ። እቲ ናይ መርበብ ፕሮክሲ እንተዘይተረኺቡ፡ ናብ ቀጥታዊ ምትእስሳር ዝኾነ ምምላስ የለን።
+- **ኣብ ዝቕጽል ግዜ ቀጽል።** መሳርሒታት፡ ፋይላትን ናይ ምእታው ኩነታትን ኣብቲ ቨርቹዋል ዲስክ ይጸንሑ። መስኮት ምስ ዓጸኻ ናይ ድሕረ ባይታ ዕማማት ክቕጽሉ ይኽእሉ።
+- **ብዙሓት ናይ Claude Code ኣካውንታት ኣመሓድር።** ንሓደስቲ Claude ተርሚናላት ኣካውንት ይምደብ፤ ናይ 5 ሰዓትን 7 መዓልትን ኣጠቓቕማ ገደባት ክትርኢ ትኽእል። ዝሰርሑ ዘለዉ ተርሚናላት ኣካውንት ብኣውቶማቲክ ኣይቀይሩን።
+- **ካብ ስልክኻ ስራሕ ቀጽል።** ናይ ልምዓት ሞባይል ክላየንት ምስ ኮምፒውተር ተራኺቡ ዝተወደቡ CLI ክፍለ ግዜታትን ፍቓድ መሳርሒታትን የቕርብ፤ ናይ ርሑቕ ቦታ ዳህሳሲ ፍሉይ ፍቓድ የድልዮ። ነቲ ሞባይል ክላየንት ካብ ምንጪ ኮድ ክትሃንጾ ኣለካ፤ ዝኾነ ንቡር ተርሚናል ኣይቆጻጸርን።
+- **Cage ኣብ ክላውድ ኣካይድ።** ነቲ መስፈርታት ዘማልእ Linux x86_64 VPS ዝተተኽለ Cage ብSSH ተራኸቦ፤ KVM ኣየድልን። ዳታን መውጽኢ መርበብን ኣብ ሰርቨር እዮም።
+
+## ቅልጡፍ ምጅማር
+
+ነዚ ሕቶ ናብ AI ወኪልካ ስደዶ (codex, dsh, workbuddy — ምናልባት ክላውድ ኮድ ኣይኮነን 😁):
+
+```markdown
+ንኽተክል ሓግዙኒ። https://github.com/tan396222-prog/Claude-AntiBan ከምኡ’ውን ናይ Cage መርበብ ፕሮክሲ ኣብቲ ናተይ ከባብያዊ ክላሽ ምትካል xxx መወዳእታ ነጥቢ ንኽጥቀም ምውቃር።
+```
+
+ዘድልየካ ዘተኣማምን ናይ መርበብ ፕሮክሲ መወዳእታ ነጥቢ ጥራይ እዩ። እዚ ፕሮጀክት ንዝኾነ ፕሮክሲ ወሃቢ ዘስፋሕፍሕ ኣይኮነን፤ ባዕልኻ ኣቕራቢ ክትረክብ ትኽእል ኢኻ፣ ንኣብነት ኣብ መርበብ ሓበሬታ Black Error ብምድላይ።
+
+## ዳውንሎድ ምግባርን ምትካልን።
+
+Cage macOS፣ Windows እና Linux ይድግፍ፦ Apple Silicon ምስ macOS 14+፣ Windows 10 22H2 / 11 x64 እና Debian 12 / Ubuntu 24.04 x86_64። Windows እና Linux ገና ኣብ ምፍታን ኣለዉ። ቀረብ ጥቕላል፣ ፊርማን ወሰን ፈተናን ኣብ መዘኻኸሪ ምውጻእ ተገሊጹ ኣሎ። Intel Mac፣ Windows ARM64 እና Linux ARM64 ገና ኣይድገፉን። [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
+
+1. ነቲ መተግበሪ ኣውርድ: [macOS / Windows / Linux](https://github.com/tan396222-prog/Claude-AntiBan/releases).
+2. macOS: ነቲ ናይ ምትካል ፓCage ከፊትካ ጎተቶ **Cage** ናብ... **መመልከቲታት**; ድሕሪኡ ካብ Applications ጀምር። Windows: [መምርሒ ምትካል](docs/windows.md#安装并开始工作) · Linux: [መምርሒ ምትካል](docs/linux.md#安装并开始工作).
+3. ናይ ገዛእ ርእስኻ ኔትወርክ ፕሮክሲ ንምውቃር፣ ነቲ ከባቢ ንምጅማርን ፕሮጀክት ንምኽፋትን ኣብ ውሽጢ ኣፕ ዘሎ መምርሒታት ተኸተል።
+
+እቲ መተካእታ ንወርክቤንችን ኔትወርክ ፕሮክሲ ኮርን የጠቓልል። መዓልታዊ ኣጠቓቕማ Go, Node.js, Docker, ወይ Clash ምትካል ኣየድልዮን እዩ። መጀመርታ ምጅማር ሕጂ ውን ናይ ሊኑክስ ምስልን መሳርሒታት ምዕባለን ንምውራድ ናይ ኢንተርነት ምትእስሳር የድሊ። Cage ናይ መርበብ ፕሮክሲ ኣገልግሎት ይኹን ናይ Claude ኣካውንት ኣይህብን እዩ።
+
+ንዝርከቡ ወግዓዊ ስሪታት [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases) ተወከስ። እቲ ምንጪ ኮድ፡ መርበብ ሓበሬታን ምውጻእን ንህዝቢ ዝቐርብ እዩ። ንመተካእታ ምፍራም፣ ኣፕል ኖታራይዜሽንን ስፍሓት ምጽዳቕን ዝምልከት ናይ ነፍሲ ወከፍ ምውጻእ መዘኻኸሪታት ተወከስ። ጽሩይ-ማሽን ምትካል፡ ኣብ macOS 14 ዝሰርሓ ፊዚካዊ ማክስ ምትእስሳር፡ ሓቀኛ ክላውድ ኣካውንት ፍቓድ፡ ከምኡ’ውን ናይ ሞዴል ሕቶታት ሕጂ’ውን ምሉእ ምጽዳቕ የድልዮም።
+
+ምሕዳስ macOS እና Windows ብዝተመርጸ ፕሮክሲ ይወርድ፤ ናብ ቀጥታ ርክብ ኣይቅየርን። ቅድሚ ምትካል ስራሕ ዓቅብን ደው ኣብልን። macOS ናይ ሓደ ኣሕታሚ Developer ID ፊርማን ምርግጋጽ Appleን የድልዮ፤ Windows ዝእመን Authenticode ፊርማን ተመሳሳሊ ህዝባዊ መፍትሕ ኣሕታሚን የድልዮ። ዘይተፈረመ Windows ቅድመ ርእይቶን Linuxን ብኢድ ይሕደሱ። [ምሕዳስን ምእላይን](docs/getting-started.md#升级与卸载)።
+
+## ብሰለስተ ስጉምትታት ጀምር
+
+### 1. ኔትወርክ ፕሮክሲ ምረጽ
+
+ኣብቲ መበገሲ ገጽ ‘Configure network and proxy’ ዝብል ጠውቕ፡ ድሕሪኡ ‘Add source’ ዝብል ጠውቕ። Clash/Mihomo YAML ምዝገባ ወይ ናይ ከባቢ YAML ፋይል ኣእትዉ፣ ኣብ ትሕቲ ‘Nodes’ ድማ መወዳእታ ነጥቢ ምረጽ። ኔትወርክ ፕሮክሲ እንተዘይተረኺቡ፡ ብግልጺ ‘Download this subscription through the host network’ ክትመርጽ ትኽእል ኢኻ፡ ወይ ድማ ብቐጥታ ሎካል ፋይል ከተእቱ ትኽእል ኢኻ። ድሒርና ኣብ ትሕቲ ‘Settings → Network and proxy’ ንዘለዉ መወዳእታ ነጥብታት ኣመሓድር።
+
+### 2. ከባቢ ምጅማር
+
+ናብቲ ናይ ስራሕ መንበር ተመሊስና ‘Start Cage environment’ ዝብል ጠውቕ። ናይቲ ኣአንጋዲ Git setup ናይ ጸጥታ መከላኸሊ እንተድኣ ኣድልይዎ፡ እቲ መተግበሪ መጀመርታ ነቲ ሳዕቤናት ይገልጽ። ‘Enable protection and continue’ ብምጥዋቕ ተግባራዊ ግበሮ። ንተራ ፕሮጀክትታት ዝግበር ውዕልን ስሕበትን ኣይጽሎን እዩ። ብድሕሪኡ Cage ነቲ ምስሊ ኣውሪዱ መሳርሒታት ይተክልን ኔትወርክ ምፍታሽ የካይድን። ኣብ ትሕቲ ‘ዝርዝር ስርሒት’ ዝግበር ምዕባለታት ርአ። እቲ ከባቢ ድሉው ምስ ኮነን ወሳኒ ምፍታሽ ምስ ሓለፈን፡ ብኢንተርነት ክትሰርሕ ትኽእል ኢኻ። ሓደ ምፍታሽ እንተዘይተዓዊቱ፡ ነቲ መምርሒታት ተኸቲልካ ነቲ ጉዳይ ንምእራምን ዳግማይ ፈትን።
+
+### 3. ፕሮጀክት ከፊትና ክላውድ ኣካይድ
+
+ኣብ ኮምፒተርና ፎልደር ንምምራጽ፡ ሓድሽ ተርሚናል ንምኽፋት፡ ‘Open project’ ዝብል ጠውቕ `claude`; ድሕሪኡ ኣብ Cage browser ናይ ገዛእ ርእስኻ ኣካውንት ፍቓድ ምሃብ። ፕሮጀክት ከየዳለኻ እውን በቲ ነባሪ ናይ ስራሕ ቦታ ክትጅምር ትኽእል ኢኻ። ንምሉእ ስጉምትታት ርአ [ምጅማር](docs/getting-started.md).
+
+## ቅድሚ ምጥቃምካ ነዞም ገደባት ተረድኦም
+
+- ኣብ ዝተኻፈለ ፕሮጀክትታት ዝግበር ኣርትዖትን ምድምሳስን ኣብ ኮምፒተርካ ንዘለዉ ፋይላት ብቐጥታ ይጸልዎም። ቨርዥን ኮንትሮል ወይ ባክኣፕስ ተጠቐም።`.git` ከምኡውን ካልኦት ሜታዳታታት ብነባሪ ንንባብ ጥራይ እዮም፤ ኣብ ኮምፒተር Git commits ምግባር።
+- ኩሎም ፕሮጀክትታት ሓደ ናይ Cage ሃዋህው ይካፈሉ፣ መሳርሒታቱ፣ ኣካውንታቱን ሊኑክስ ፋይልሲስተምን ሓዊሱ። ፕሮጀክትታት ካብ ነንሕድሕዶም ዝተነጸሉ ኣይኮኑን።
+- ኣብዚ እዋን እዚ እቲ ጋሻ ብመንገዲ ኔትወርክ ፕሮክሲ ናብ ህዝባዊ IPv4 TCP ክረክብ ኣለዎ፣ DNS ድማ ብተመሳሳሊ ፕሮክሲ ይለኣኽ። ህዝባዊ UDP, IPv6, ICMP, ከምኡ’ውን ብጋሻ ዝተበገሱ ርክባት ናብቲ ኣአንጋዲ ወይ ከባብያዊ መርበብ ይዕገቱ። ኣብዞም ዓቕምታት ዝምርኮሱ መሳርሒታት ክሰርሑ ኣይክእሉን እዮም።
+- ኔትወርክ ምፍታሽ ህሉው ውቅርን ናሙና ዝተወሰደ መርትዖን የርኢ። ሓደ ኣካውንት ካብ ናይ መድረኽ ገደባት ከም ዝርሕቕ ውሕስነት ክህቡ ኣይክእሉን እዮም፣ ምሉእ ቨርቹዋላይዜሽን ድሕነት ኦዲት ድማ ኣይትክኡን እዮም።
+
+ንዝርዝር ሓበሬታ ርአ [ዶባት ኔትወርክን ዳታን](docs/getting-started.md#网络与数据边界), [ኔትወርክ ዲዛይን ይምርምር](docs/design/network-checks.md) ከምኡ’ውን... [ኣብ ውሽጡ ዝተሃንጸ ዲዛይን ፕሮክሲ ኔትወርክ](docs/design/managed-proxy.md).
+
+## ሰነዳትን ኣበርክቶታትን
+
+ንምሉእ መመልከቲ ርአ [ናይ ሰነድ መመልከቲ](docs/README.md).
+
+| ዕማምካ | ካብዚ ጀምር |
+|---|---|
+| ኔትወርክ ፕሮክሲ ምትካል፡ ምውቃር፡ ናይ መጀመርታ ፕሮጀክትካ ድማ ክፈት | [ምጅማር](docs/getting-started.md) |
+| ናይ ምውራድ፣ ምጅማር፣ ምትእስሳርን ምእታውን ጸገማት ምፍታሕ | [FAQን ምሕዋይን](docs/troubleshooting.md) |
+| ቁጽጽር ቁልፊ ሰሌዳ፡ መልክዕ፡ ጽንዓት ዳታን ናይ ምውጻእ ባህሪን ተማሃር | [መዓልታዊ ኣጠቓቕማ](docs/getting-started.md#日常使用) |
+| ካብ ምንጪ ምህናጽ ወይ ምምሕያሻት ኣበርክቶ | [መምርሒ ኣበርክቶ](CONTRIBUTING.md) |
+| ናይ ሞዱል ሓላፍነትን ናይ መርበብ ድሩትነትን ምርዳእ | [ዲዛይን ናይ ስራሕ መንበር](docs/design/workbench.md) |
+| ክባዛሕ ዝኽእል ጉዳይ ሪፖርት ግበሩ | [GitHub Issues](https://github.com/tan396222-prog/Claude-AntiBan/issues) |
+
+እቲ ፕሮጀክት ብቕልጡፍ ይምዕብል ኣሎ። ርእይቶ ንምክፋል ኣብቲ ናይ ማሕበረሰብ ጉጅለ ​​ተጸንበሩ፤ ሕብረተሰብ ዝሕልዉ ሰባት ድሉዋት እዮም።
+## መበቆልን ፍቓድን ምሃብ
+
+ጓጓ ካብ ዝመጸ እዩ። [agent-vm](https://github.com/sylvinus/agent-vm) ; እቲ ላዕለዋይ መበገሲ መስመር እዩ። `652688aae92c35ce536b9be52262e1cc5ec6e03a`.
+
+እቲ ፕሮጀክት ቀንዲ ፍቓድ... [MIT](LICENSE). ዝተጠርነፉ ኣካላት በብወገኖም ፍቓድ ይዕቅቡ። ሚሆሞ ኣብ ትሕቲ GPL-3.0 ከም ፍሉይ ፈጻሚ ይዝርጋሕ። ከምኡ ውን ርአ [NOTICE](NOTICE), [ናይ ሳልሳይ ወገን ፍቓድ](THIRD_PARTY_LICENSES), [ሳልሳይ ወገን ምንጭታት](third_party/SOURCES) ከምኡ’ውን... [noVNC መበቆል እዩ።](ui/vendor/novnc/README.cage.md). እቲ ላዕለዋይ ፕሮጀክት ዝሃቦ መግለጺ ኣብቲ... [ላዕለዋይ ጽፍሒ README](docs/agent-vm-upstream.md).
+
+Cage ናጻ ማሕበረሰባዊ ፕሮጀክት ኮይኑ ምስ ኣንትሮፒክ ርክብ የብሉን።
+
+## መወከሲታትን ምስጋናን ምሃብ
+
+ምስጋና ነዞም ዝስዕቡ ፕሮጀክትታት ንመሰረታዊ ዓቕምታትን መወከሲታት ዲዛይንን፤
+
+- [agent-vm](https://github.com/sylvinus/agent-vm): እቲ ላዕለዋይ መሰረት Cage።
+- [Lima](https://github.com/lima-vm/lima): ምሕደራ ቨርቹዋል ማሽን ሊኑክስ።
+- [gvisor-tap-vsock](https://github.com/containers/gvisor-tap-vsock): ቨርቹዋል ማሽን ኔትወርኪንግ።
+- [sshocker](https://github.com/lima-vm/sshocker) ከምኡ’ውን... [SFTP](https://github.com/pkg/sftp): ኣብ መንጎ ቨርቹዋል ማሽንን ሆስትን ፋይል ምክፋል።
+- [noVNC](https://github.com/novnc/noVNC): ርሑቕ ምርኢትን ምትእስሳርን ኣብ መርበብ ሓበሬታ።
+- [Mihomo](https://github.com/MetaCubeX/mihomo): እቲ ኣብ ውሽጢ ዝተሃንጸ መርበብ ፕሮክሲ ኮር።
+- [code-server](https://github.com/coder/code-server): እቲ ኣብ መርበብ ሓበሬታ ዝተመርኮሰ ናይ ኮድ ኣርታዒ።
+- [AIO Sandbox](https://github.com/agent-infra/sandbox): መወከሲታት ንሃዋህው ስራሕን ዲዛይን ምትእስሳርን.
+- [claude-switcher](https://github.com/YOURSJEYO/claude-switcher) ከምኡ’ውን... [Claude-Guardian](https://github.com/DUNHKpcc/Claude-Guardian): መወከሲታት ንናይ መርበብ ምፍታሽን ናይ ድሕነት መርመራታትን።

@@ -1,0 +1,27 @@
+{
+  "name": "cage-workbench",
+  "private": true,
+  "version": "0.1.6-alpha-preview",
+  "type": "module",
+  "scripts": {
+    "prepare-vnc": "node scripts/prepare-vnc.mjs",
+    "dev": "npm run prepare-vnc && vite --host 127.0.0.1",
+    "build": "npm run prepare-vnc && vite build",
+    "test": "node --test src/*.test.mjs",
+    "lint": "eslint src"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
+    "lucide-react": "1.65.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.2",
+    "eslint": "10.14.0",
+    "globals": "17.13.0",
+    "prettier": "3.9.10",
+    "vite": "8.3.5"
+  }
+}

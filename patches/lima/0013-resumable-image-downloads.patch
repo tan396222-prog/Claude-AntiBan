@@ -1,0 +1,435 @@
+Subject: [PATCH] Resume digest-pinned image downloads across setup retries
+
+Retain partial cache data under the existing directory lock. Validate ranges
+and the full pinned digest before publishing; keep proxy routing unchanged.
+
+---
+diff --git a/pkg/downloader/downloader.go b/pkg/downloader/downloader.go
+--- a/pkg/downloader/downloader.go
++++ b/pkg/downloader/downloader.go
+@@ -409,7 +409,13 @@
+ 	if err := os.WriteFile(shadURL, []byte(remote), 0o644); err != nil {
+ 		return nil, err
+ 	}
+-	if err := downloadHTTP(ctx, shadData, shadTime, shadType, remote, o.description, o.expectedDigest); err != nil {
++	// A cache entry is locked by Download. Only digest-pinned downloads may
++	// retain and resume partial bytes across processes and setup retries.
++	download := downloadHTTP
++	if o.expectedDigest != "" {
++		download = downloadHTTPResumable
++	}
++	if err := download(ctx, shadData, shadTime, shadType, remote, o.description, o.expectedDigest); err != nil {
+ 		return nil, err
+ 	}
+ 	if shadDigest != "" && o.expectedDigest != "" {
+@@ -1056,6 +1062,7 @@
+ 	return lockutil.WithDirLock(dir, func() error {
+ 		patterns := []string{
+ 			filepath.Join(dir, "data.part"),
++			filepath.Join(dir, "data.part.digest"),
+ 			filepath.Join(dir, "data.tmp.*"),
+ 		}
+ 		for _, pattern := range patterns {
+diff --git a/pkg/downloader/resume.go b/pkg/downloader/resume.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/downloader/resume.go
+@@ -0,0 +1,213 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package downloader
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"net/http"
++	"os"
++	"strconv"
++	"strings"
++	"time"
++
++	"github.com/lima-vm/lima/v2/pkg/progressbar"
++	"github.com/opencontainers/go-digest"
++	"github.com/sirupsen/logrus"
++)
++
++// downloadHTTPResumable is called only while holding the cache directory lock
++// and with a pinned digest. A partial response is never published as cache data.
++func downloadHTTPResumable(ctx context.Context, local, modified, contentType, remote, description string, expected digest.Digest) error {
++	part := local + ".part"
++	identity := part + ".digest"
++	previous, err := os.ReadFile(identity)
++	if err != nil && !errors.Is(err, os.ErrNotExist) {
++		return err
++	}
++	if string(previous) != expected.String() {
++		if err := os.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
++			return err
++		}
++		if err := os.WriteFile(identity, []byte(expected.String()), 0600); err != nil {
++			return err
++		}
++	}
++	// Cancellation can arrive after all bytes were received but before rename.
++	if validateLocalFileDigest(part, expected) == nil {
++		return publishPartial(part, local, identity)
++	}
++	for attempt := 0; attempt < 4; attempt++ {
++		if ctx.Err() != nil {
++			return ctx.Err()
++		}
++		attemptCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
++		var retry bool
++		retry, err = resumeHTTPOnce(attemptCtx, local, modified, contentType, remote, description, expected)
++		cancel()
++		if err == nil {
++			return publishPartial(part, local, identity)
++		}
++		if !retry {
++			return err
++		}
++		if attempt < 3 {
++			logrus.Infof("Image download interrupted; retry %d/3 will reuse saved partial data", attempt+1)
++			select {
++			case <-ctx.Done():
++				return ctx.Err()
++			case <-time.After(time.Duration(attempt+1) * time.Second):
++			}
++		}
++	}
++	return fmt.Errorf("image download interrupted; partial data retained for setup retry: %w", err)
++}
++
++func publishPartial(part, local, identity string) error {
++	if err := os.Rename(part, local); err != nil {
++		return err
++	}
++	return os.Remove(identity)
++}
++
++func resumeHTTPOnce(ctx context.Context, local, modified, contentType, remote, description string, expected digest.Digest) (bool, error) {
++	part := local + ".part"
++	var offset int64
++	if st, err := os.Stat(part); err == nil {
++		offset = st.Size()
++	} else if !errors.Is(err, os.ErrNotExist) {
++		return false, err
++	}
++	ctx, cancel := context.WithCancel(ctx)
++	defer cancel()
++	// A slow but progressing transfer may run for 30 minutes. A stalled
++	// connection is interrupted after one minute so a fresh attempt can resume.
++	idle := time.AfterFunc(time.Minute, cancel)
++	defer idle.Stop()
++	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remote, nil)
++	if err != nil {
++		return false, err
++	}
++	req.Header.Set("Accept-Encoding", "identity")
++	if offset > 0 {
++		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
++	}
++	resp, err := http.DefaultClient.Do(req)
++	if err != nil {
++		return true, err
++	}
++	defer resp.Body.Close()
++	var total int64
++	expectedBody := resp.ContentLength
++	switch resp.StatusCode {
++	case http.StatusOK:
++		// Servers may ignore Range. Replace the partial file instead of appending.
++		offset, total = 0, resp.ContentLength
++	case http.StatusPartialContent:
++		start, end, size, ok := parseDownloadRange(resp.Header.Get("Content-Range"))
++		if !ok || start != offset || (resp.ContentLength >= 0 && resp.ContentLength != end-start+1) {
++			return false, errors.New("invalid image Content-Range; partial data left unchanged")
++		}
++		total = size
++		expectedBody = end - start + 1
++	case http.StatusRequestedRangeNotSatisfiable:
++		// The digest above already ruled out a completed file. Reset only this
++		// incomplete artifact, for a server whose representation has changed.
++		if err := os.Remove(part); err != nil && !errors.Is(err, os.ErrNotExist) {
++			return false, err
++		}
++		return true, errors.New("image range rejected; restarting this artifact")
++	default:
++		return resp.StatusCode == 408 || resp.StatusCode == 429 || resp.StatusCode >= 500, fmt.Errorf("image download returned HTTP %d", resp.StatusCode)
++	}
++	for name, value := range map[string]string{modified: resp.Header.Get("Last-Modified"), contentType: resp.Header.Get("Content-Type")} {
++		if name != "" {
++			if err := os.WriteFile(name, []byte(value), 0600); err != nil {
++				return false, err
++			}
++		}
++	}
++	flags := os.O_CREATE | os.O_WRONLY
++	if offset == 0 {
++		flags |= os.O_TRUNC
++	}
++	out, err := os.OpenFile(part, flags, 0600)
++	if err != nil {
++		return false, err
++	}
++	defer out.Close()
++	if _, err := out.Seek(offset, io.SeekStart); err != nil {
++		return false, err
++	}
++	bar, err := progressbar.New(total)
++	if err != nil {
++		return false, err
++	}
++	if HideProgress {
++		hideBar(bar)
++	}
++	bar.SetCurrent(offset)
++	if description == "" {
++		description = "pinned image"
++	}
++	logrus.Infof("Downloading %s; continuing at %d bytes", description, offset)
++	bar.Start()
++	defer bar.Finish()
++	reader := &downloadActivityReader{reader: resp.Body, timer: idle}
++	n, err := io.Copy(out, bar.NewProxyReader(reader))
++	if err != nil {
++		return true, err
++	}
++	if expectedBody >= 0 && n != expectedBody {
++		if n > expectedBody {
++			_ = out.Close()
++			_ = os.Remove(part)
++			return false, errors.New("image response exceeded its declared range; partial data discarded")
++		}
++		return true, io.ErrUnexpectedEOF
++	}
++	if total >= 0 && n+offset != total {
++		return true, io.ErrUnexpectedEOF
++	}
++	if err := out.Sync(); err != nil {
++		return false, err
++	}
++	if err := out.Close(); err != nil {
++		return false, err
++	}
++	if err := validateLocalFileDigest(part, expected); err != nil {
++		_ = os.Remove(part)
++		return false, fmt.Errorf("image checksum mismatch; partial data discarded: %w", err)
++	}
++	return false, nil
++}
++
++type downloadActivityReader struct {
++	reader io.Reader
++	timer  *time.Timer
++}
++
++func (r *downloadActivityReader) Read(p []byte) (int, error) {
++	n, err := r.reader.Read(p)
++	if n > 0 {
++		r.timer.Reset(time.Minute)
++	}
++	return n, err
++}
++
++func parseDownloadRange(value string) (start, end, total int64, ok bool) {
++	span, size, found := strings.Cut(strings.TrimPrefix(value, "bytes "), "/")
++	first, last, dash := strings.Cut(span, "-")
++	if !strings.HasPrefix(value, "bytes ") || !found || !dash {
++		return
++	}
++	var a, b, c error
++	start, a = strconv.ParseInt(first, 10, 64)
++	end, b = strconv.ParseInt(last, 10, 64)
++	total, c = strconv.ParseInt(size, 10, 64)
++	ok = a == nil && b == nil && c == nil && start >= 0 && end >= start && total > end
++	return
++}
+diff --git a/pkg/downloader/resume_test.go b/pkg/downloader/resume_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/downloader/resume_test.go
+@@ -0,0 +1,180 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package downloader
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync/atomic"
++	"testing"
++	"time"
++
++	"github.com/opencontainers/go-digest"
++)
++
++func TestPinnedDownloadResumesInterruptedBody(t *testing.T) {
++	data := "0123456789abcdef"
++	var calls atomic.Int32
++	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		if calls.Add(1) == 1 {
++			w.Header().Set("Content-Length", "16")
++			fmt.Fprint(w, data[:5])
++			return
++		}
++		if r.Header.Get("Range") != "bytes=5-" {
++			t.Errorf("did not resume: %q", r.Header.Get("Range"))
++		}
++		w.Header().Set("Content-Range", "bytes 5-15/16")
++		w.WriteHeader(http.StatusPartialContent)
++		fmt.Fprint(w, data[5:])
++	}))
++	defer s.Close()
++	cache := t.TempDir()
++	r, err := Download(t.Context(), "", s.URL, WithCacheDir(cache), WithExpectedDigest(digest.FromString(data)))
++	if err != nil {
++		t.Fatal(err)
++	}
++	got, err := os.ReadFile(r.CachePath)
++	if err != nil || string(got) != data || calls.Load() != 2 {
++		t.Fatalf("result %q, calls %d, error %v", got, calls.Load(), err)
++	}
++}
++
++func TestPinnedDownloadAcrossSetupRetries(t *testing.T) {
++	for _, mode := range []string{"range", "ignore-range", "bad-range", "wrong-hash", "changed-digest", "complete", "range-rejected"} {
++		t.Run(mode, func(t *testing.T) {
++			data := "0123456789abcdef"
++			var calls atomic.Int32
++			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				calls.Add(1)
++				switch mode {
++				case "complete":
++					t.Error("complete partial was downloaded again")
++				case "changed-digest", "ignore-range":
++					if mode == "changed-digest" && r.Header.Get("Range") != "" {
++						t.Error("resumed a different digest")
++					}
++					fmt.Fprint(w, data)
++				case "range-rejected":
++					if calls.Load() == 1 {
++						w.WriteHeader(416)
++					} else {
++						if r.Header.Get("Range") != "" {
++							t.Error("rejected range was reused")
++						}
++						fmt.Fprint(w, data)
++					}
++				default:
++					if r.Header.Get("Range") != "bytes=5-" {
++						t.Error("partial not reused")
++					}
++					span := "bytes 5-15/16"
++					if mode == "bad-range" {
++						span = "bytes 4-14/16"
++					}
++					w.Header().Set("Content-Range", span)
++					w.WriteHeader(206)
++					if mode == "wrong-hash" {
++						fmt.Fprint(w, "xxxxxxxxxxx")
++					} else {
++						fmt.Fprint(w, data[5:])
++					}
++				}
++			}))
++			defer s.Close()
++			cache := t.TempDir()
++			dir := cacheDirectoryPath(cache, s.URL)
++			if err := os.MkdirAll(dir, 0700); err != nil {
++				t.Fatal(err)
++			}
++			part := filepath.Join(dir, "data.part")
++			body, expected := data[:5], digest.FromString(data)
++			identity := expected.String()
++			if mode == "changed-digest" {
++				identity = digest.FromString("old").String()
++			}
++			if mode == "complete" {
++				body = data
++			}
++			if err := os.WriteFile(part, []byte(body), 0600); err != nil {
++				t.Fatal(err)
++			}
++			if err := os.WriteFile(part+".digest", []byte(identity), 0600); err != nil {
++				t.Fatal(err)
++			}
++			r, err := Download(t.Context(), "", s.URL, WithCacheDir(cache), WithExpectedDigest(expected))
++			if mode == "bad-range" || mode == "wrong-hash" {
++				if err == nil {
++					t.Fatal("invalid data accepted")
++				}
++				if _, err := os.Stat(filepath.Join(dir, "data")); !os.IsNotExist(err) {
++					t.Fatal("invalid cache published")
++				}
++				if mode == "bad-range" {
++					got, _ := os.ReadFile(part)
++					if string(got) != body {
++						t.Fatal("bad range altered partial")
++					}
++				} else if _, err := os.Stat(part); !os.IsNotExist(err) {
++					t.Fatal("corrupt partial retained")
++				}
++				return
++			}
++			if err != nil {
++				t.Fatal(err)
++			}
++			got, err := os.ReadFile(r.CachePath)
++			if err != nil || string(got) != data {
++				t.Fatalf("got %q: %v", got, err)
++			}
++		})
++	}
++}
++
++func TestPinnedDownloadCancellationRetainsPartial(t *testing.T) {
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++		w.Header().Set("Content-Length", "1000")
++		fmt.Fprint(w, "partial")
++		w.(http.Flusher).Flush()
++		<-r.Context().Done()
++	}))
++	defer s.Close()
++	dir := t.TempDir()
++	local := filepath.Join(dir, "data")
++	done := make(chan error, 1)
++	go func() {
++		done <- downloadHTTPResumable(ctx, local, "", "", s.URL, "test", digest.FromString(strings.Repeat("x", 1000)))
++	}()
++	// Wait for the client to persist data, not just for the server to send it.
++	for i := 0; i < 1000; i++ {
++		if st, err := os.Stat(local + ".part"); err == nil && st.Size() > 0 {
++			break
++		}
++		select {
++		case err := <-done:
++			t.Fatalf("ended early: %v", err)
++		default:
++		}
++		time.Sleep(time.Millisecond)
++	}
++	cancel()
++	if err := <-done; !errors.Is(err, context.Canceled) {
++		t.Fatalf("cancel: %v", err)
++	}
++	got, err := os.ReadFile(local + ".part")
++	if err != nil || string(got) != "partial" {
++		t.Fatalf("partial lost: %q %v", got, err)
++	}
++	if _, err := os.Stat(local); !os.IsNotExist(err) {
++		t.Fatal("cancelled data published")
++	}
++}

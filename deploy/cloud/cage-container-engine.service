@@ -1,0 +1,23 @@
+[Unit]
+Description=Cage private rootless container engine
+Documentation=https://docs.docker.com/engine/security/rootless/
+
+[Service]
+Environment=PATH=%h/.claude-cage/container-engine/tools:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=XDG_RUNTIME_DIR=%t
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=%t/bus
+Environment=DOCKER_CONFIG=%h/.claude-cage/container-engine/client
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_STATE_DIR=%t/cage-container-engine/rootlesskit
+Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=gvisor-tap-vsock
+RuntimeDirectory=cage-container-engine
+RuntimeDirectoryMode=0700
+ExecStart=%h/.claude-cage/container-engine/tools/dockerd-rootless.sh --config-file=%h/.claude-cage/container-engine/daemon.json --data-root=%h/.claude-cage/container-engine/data --exec-root=%t/cage-container-engine/exec --pidfile=%t/cage-container-engine/docker.pid --host=unix://%t/cage-container-engine/docker.sock --storage-driver=overlay2 --exec-opt=native.cgroupdriver=systemd --userland-proxy=false --bridge=none
+Delegate=yes
+KillMode=mixed
+TimeoutStartSec=120
+TimeoutStopSec=120
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

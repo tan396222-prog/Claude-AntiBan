@@ -1,0 +1,18 @@
+Use case: ads-marketing, specifically an independent OPEN SOURCE COMMUNITY PROJECT introduction, not a commercial advertisement.
+Create a complete finished Chinese poster 1536x2048. Input image is ONLY the actual Cage logo reference: orange pixel creature behind black cage bars. Preserve recognizable logo identity but do not scale the reference to fill poster. This is a new art direction.
+Audience: developers and Claude users sharing a useful open source tool on Xiaohongshu and X. Quiet, sincere, useful, inviting. Strong readable Chinese typography with generous margins, clear hierarchy. No price, no "0元", no sales pitch, no button CTA, no glossy glass/metal cube, no security shield, no exaggerated safety claims, no disclaimer/fine-print block at bottom, no QR, no official endorsement, no invented stats, no extra text.
+Keep all body copy at genuinely phone-readable size; repository URL must be accurate.
+
+Direction C: playful indie open source pixel-art club poster. Pale soft mint background, dark forest green typography, orange pixel mascot, small cream accents. Strictly flat 2D pixel art with deliberately hard pixel edges for the illustration. Chinese TEXT must be clean readable modern sans, not garbled pixel font. Large centered typography with airy spacing. In the central third, a cozy tiny pixel-art workspace/garden: friendly orange mascot from logo inside a modest outlined workspace, one small terminal monitor, leafy pixels and a short orange network cable. No prison atmosphere, no glossy/glass rendering, no neon cyberpunk. The visual should feel like a community hobby project sticker / game jam poster, not enterprise software ad. Bottom half has plain aligned short functional notes, thin pixel divider, friendly understated contribution line. Avoid sales badges and call-to-action buttons.
+Use EXACT copy:
+Top: "Cage" and "一个开源小项目"
+Headline: "少折腾环境，" / "多做点有意思的事。"
+Subheading: "为 Claude 准备的独立工作空间"
+Functional notes:
+"配置自己的代理 · 环境自动准备"
+"内置泄漏检查 · 代理断开不回退直连"
+"支持多账号调度"
+Smaller but readable qualification directly below last note: "新建 Claude Code 终端时分配"
+Community line: "欢迎围观、提 Issue，也欢迎一起写代码。"
+Footer: "macOS / Windows / Linux"
+Repo: "github.com/tan396222-prog/Claude-AntiBan"

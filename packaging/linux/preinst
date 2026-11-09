@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+# Replacing a running controller or proxy would break its verified identity.
+# Do not stop another user's work from a privileged package script.
+if [ "${1:-}" = upgrade ] || [ "${1:-}" = install ] || [ "${1:-}" = remove ]; then
+  for process in /proc/[0-9]*; do
+    executable=$(readlink "$process/exe" 2>/dev/null || true)
+    # Restricted /proc setups may hide another user's executable link from
+    # package scripts. Check the launch path too; never silently bypass a
+    # running packaged program just because readlink was denied.
+    if [ -z "$executable" ]; then
+      executable=$(tr '\000' '\n' < "$process/cmdline" 2>/dev/null | head -n 1) || executable=
+    fi
+    case "$executable" in
+      /usr/bin/claude-cage|/usr/bin/cage-desktop|/usr/lib/claude-cage/cage|/usr/lib/claude-cage/cage-desktop|/usr/lib/claude-cage/mihomo|/usr/lib/claude-cage/*' (deleted)')
+        echo 'Cage is running. Save work, stop the environment, and quit Cage before changing the installation.' >&2
+        exit 1
+        ;;
+    esac
+  done
+fi

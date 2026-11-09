@@ -1,0 +1,197 @@
+diff --git a/pkg/services/dns/dns.go b/pkg/services/dns/dns.go
+index 9f86fe8c..968331a6 100644
+--- a/pkg/services/dns/dns.go
++++ b/pkg/services/dns/dns.go
+@@ -27,6 +27,9 @@ type dnsHandler struct {
+ 	zones     []types.Zone
+ 	zonesLock sync.RWMutex
+ 	upstream  upstreamResolver
++
++	names    func(name string) bool
++	answered func(name string, ips []net.IP)
+ }
+ 
+ func (h *dnsHandler) handle(w dns.ResponseWriter, r *dns.Msg, responseMessageSize int) {
+@@ -118,6 +121,11 @@ func splitTxt(s string) []string {
+ }
+ func (h *dnsHandler) addAnswers(m *dns.Msg) {
+ 	for _, q := range m.Question {
++		if h.names != nil && !h.names(strings.TrimSuffix(q.Name, ".")) {
++			m.Answer = nil
++			m.Rcode = dns.RcodeNameError
++			return
++		}
+ 		if done := h.addLocalAnswers(m, q); done {
+ 			return
+ 		}
+@@ -130,10 +138,12 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
+ 				m.Rcode = dns.RcodeNameError
+ 				return
+ 			}
++			var given []net.IP
+ 			for _, ip := range ips {
+ 				if len(ip.IP.To4()) != net.IPv4len {
+ 					continue
+ 				}
++				given = append(given, ip.IP.To4())
+ 				m.Answer = append(m.Answer, &dns.A{
+ 					Hdr: dns.RR_Header{
+ 						Name:   q.Name,
+@@ -144,6 +154,9 @@ func (h *dnsHandler) addAnswers(m *dns.Msg) {
+ 					A: ip.IP.To4(),
+ 				})
+ 			}
++			if h.answered != nil {
++				h.answered(strings.TrimSuffix(q.Name, "."), given)
++			}
+ 		case dns.TypeCNAME:
+ 			cname, err := resolver.LookupCNAME(context.TODO(), q.Name)
+ 			if err != nil {
+@@ -255,6 +268,12 @@ func NewWithUpstreamResolver(udpConn net.PacketConn, tcpLn net.Listener, zones [
+ 	return &Server{udpConn: udpConn, tcpLn: tcpLn, handler: handler}, nil
+ }
+ 
++// SetPolicy sets the hooks of Configuration.DNSNames and DNSAnswered. Call it
++// before Serve and ServeTCP.
++func (s *Server) SetPolicy(names func(name string) bool, answered func(name string, ips []net.IP)) {
++	s.handler.names, s.handler.answered = names, answered
++}
++
+ func (s *Server) Serve() error {
+ 	mux := dns.NewServeMux()
+ 	mux.HandleFunc(".", s.handler.handleUDP)
+diff --git a/pkg/services/dns/dns_test.go b/pkg/services/dns/dns_test.go
+index 211d90f2..38461e7d 100644
+--- a/pkg/services/dns/dns_test.go
++++ b/pkg/services/dns/dns_test.go
+@@ -3,6 +3,7 @@ package dns
+ import (
+ 	"context"
+ 	"net"
++	"sync"
+ 	"testing"
+ 	"time"
+ 
+@@ -395,3 +396,89 @@ func startDNSServer(upstream upstreamResolver) (string, func(), error) {
+ 		tcpLn.Close()
+ 	}, nil
+ }
++
++type countingResolver struct {
++	upstreamResolver
++	mu    sync.Mutex
++	asked []string
++}
++
++func (c *countingResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
++	c.mu.Lock()
++	c.asked = append(c.asked, host)
++	c.mu.Unlock()
++	return c.upstreamResolver.LookupIPAddr(ctx, host)
++}
++
++func TestPolicy(t *testing.T) {
++	upstream := &countingResolver{upstreamResolver: &mockdns.Resolver{
++		Zones: map[string]mockdns.Zone{
++			"ok.test.": {A: []string{"192.0.2.1"}},
++			"no.test.": {A: []string{"192.0.2.2"}},
++		},
++	}}
++	udpConn, err := net.ListenPacket("udp", "127.0.0.1:0")
++	require.NoError(t, err)
++	defer udpConn.Close()
++	tcpLn, err := net.Listen("tcp", "127.0.0.1:0")
++	require.NoError(t, err)
++	defer tcpLn.Close()
++	server, err := NewWithUpstreamResolver(udpConn, tcpLn, nil, upstream)
++	require.NoError(t, err)
++
++	var mu sync.Mutex
++	told := map[string][]net.IP{}
++	server.SetPolicy(
++		func(name string) bool { return name == "ok.test" },
++		func(name string, ips []net.IP) {
++			mu.Lock()
++			defer mu.Unlock()
++			told[name] = ips
++		})
++	go func() { _ = server.Serve() }()
++	go func() { _ = server.ServeTCP() }()
++	time.Sleep(100 * time.Millisecond)
++
++	for _, proto := range []string{"udp", "tcp"} {
++		c := &dns.Client{Net: proto}
++		addr := udpConn.LocalAddr().String()
++		if proto == "tcp" {
++			addr = tcpLn.Addr().String()
++		}
++
++		q := new(dns.Msg)
++		q.SetQuestion("NO.test.", dns.TypeA)
++		r, _, err := c.Exchange(q, addr)
++		require.NoError(t, err, proto)
++		require.Equal(t, dns.RcodeNameError, r.Rcode, proto)
++		require.Empty(t, r.Answer, proto)
++
++		q = new(dns.Msg)
++		q.SetQuestion("ok.test.", dns.TypeA)
++		r, _, err = c.Exchange(q, addr)
++		require.NoError(t, err, proto)
++		require.Equal(t, dns.RcodeSuccess, r.Rcode, proto)
++		require.Len(t, r.Answer, 1, proto)
++
++	}
++
++	// One refused question refuses the message.
++	m := new(dns.Msg)
++	m.Question = []dns.Question{
++		{Name: "ok.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
++		{Name: "no.test.", Qtype: dns.TypeA, Qclass: dns.ClassINET},
++	}
++	server.handler.addAnswers(m)
++	require.Equal(t, dns.RcodeNameError, m.Rcode)
++	require.Empty(t, m.Answer)
++
++	mu.Lock()
++	defer mu.Unlock()
++	require.Equal(t, []net.IP{net.ParseIP("192.0.2.1").To4()}, told["ok.test"])
++	require.NotContains(t, told, "no.test")
++	upstream.mu.Lock()
++	defer upstream.mu.Unlock()
++	for _, host := range upstream.asked {
++		require.Equal(t, "ok.test.", host, "a refused name was looked up")
++	}
++}
+diff --git a/pkg/types/configuration.go b/pkg/types/configuration.go
+index 0a3874cf..c5a29028 100644
+--- a/pkg/types/configuration.go
++++ b/pkg/types/configuration.go
+@@ -69,6 +69,15 @@ type Configuration struct {
+ 	// destination once NAT applied. A refused TCP connection is reset, a
+ 	// refused UDP datagram dropped.
+ 	Outbound Outbound `yaml:"-"`
++
++	// DNSNames, when set, decides which names the gateway's resolver looks
++	// up: any other (the name without its final dot) gets NXDOMAIN, and is
++	// never asked of the host's resolver. This covers every query the
++	// gateway receives, over UDP or TCP.
++	DNSNames func(name string) bool `yaml:"-"`
++	// DNSAnswered, when set, is told of the IPv4 addresses given for name,
++	// so that Outbound can let the guest reach those only.
++	DNSAnswered func(name string, ips []net.IP) `yaml:"-"`
+ }
+ 
+ type Protocol string
+diff --git a/pkg/virtualnetwork/services.go b/pkg/virtualnetwork/services.go
+index d8e0505d..48f9e765 100644
+--- a/pkg/virtualnetwork/services.go
++++ b/pkg/virtualnetwork/services.go
+@@ -82,6 +82,8 @@ func dnsServer(configuration *types.Configuration, s *stack.Stack) (http.Handler
+ 		return nil, err
+ 	}
+ 
++	server.SetPolicy(configuration.DNSNames, configuration.DNSAnswered)
++
+ 	go func() {
+ 		if err := server.Serve(); err != nil {
+ 			log.Error(err)

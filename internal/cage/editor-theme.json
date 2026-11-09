@@ -1,0 +1,28 @@
+{
+  "workbench.colorTheme": "Default Light Modern",
+  "workbench.colorCustomizations": {
+    "editor.selectionBackground": "#d5e5ff"
+  },
+  "editor.tokenColorCustomizations": {
+    "[*Light*]": {
+      "textMateRules": [
+        {
+          "scope": "ref.matchtext",
+          "settings": {
+            "foreground": "#000"
+          }
+        }
+      ]
+    },
+    "[*Dark*]": {
+      "textMateRules": [
+        {
+          "scope": "ref.matchtext",
+          "settings": {
+            "foreground": "#fff"
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,41 @@
+diff --git a/pkg/downloader/downloader.go b/pkg/downloader/downloader.go
+index c5977d8..3dfa402 100644
+--- a/pkg/downloader/downloader.go
++++ b/pkg/downloader/downloader.go
+@@ -80,9 +80,15 @@ func (o *options) apply(opts []Opt) error {
+ 
+ type Opt func(*options) error
+ 
+-// WithCache enables caching using filepath.Join(os.UserCacheDir(), "lima") as the cache dir.
++// WithCache uses Cage's environment volume when configured, or the user's Lima cache.
+ func WithCache() Opt {
+ 	return func(o *options) error {
++		if dir := os.Getenv("CAGE_LIMA_CACHE_DIR"); dir != "" {
++			if !filepath.IsAbs(dir) {
++				return fmt.Errorf("CAGE_LIMA_CACHE_DIR must be absolute")
++			}
++			return WithCacheDir(dir)(o)
++		}
+ 		ucd, err := os.UserCacheDir()
+ 		if err != nil {
+ 			return err
+diff --git a/pkg/downloader/resume_test.go b/pkg/downloader/resume_test.go
+index 896242c..5a76bdd 100644
+--- a/pkg/downloader/resume_test.go
++++ b/pkg/downloader/resume_test.go
+@@ -37,10 +37,14 @@ func TestPinnedDownloadResumesInterruptedBody(t *testing.T) {
+ 	}))
+ 	defer s.Close()
+ 	cache := t.TempDir()
+-	r, err := Download(t.Context(), "", s.URL, WithCacheDir(cache), WithExpectedDigest(digest.FromString(data)))
++	t.Setenv("CAGE_LIMA_CACHE_DIR", cache)
++	r, err := Download(t.Context(), "", s.URL, WithCache(), WithExpectedDigest(digest.FromString(data)))
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
++	if rel, err := filepath.Rel(cache, r.CachePath); err != nil || !filepath.IsLocal(rel) {
++		t.Fatalf("download landed outside chosen cache: %q", r.CachePath)
++	}
+ 	got, err := os.ReadFile(r.CachePath)
+ 	if err != nil || string(got) != data || calls.Load() != 2 {
+ 		t.Fatalf("result %q, calls %d, error %v", got, calls.Load(), err)

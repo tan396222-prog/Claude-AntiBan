@@ -1,0 +1,53 @@
+import assert from "node:assert/strict";
+import { createWorkbench } from "./workbench-fixture.mjs";
+
+const { browser, page, state, errors } = await createWorkbench();
+try {
+  state.status.local_vm_storage = true;
+  let location = { directory: "C:\\Users\\demo\\.claude-cage\\state", has_environment: false };
+  const writes = [];
+  const destination = "D:\\开发工具\\Cage 环境";
+  await page.route("**/api/environment/storage", (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: location });
+    const input = route.request().postDataJSON();
+    writes.push(input);
+    const rejected = input.directory.endsWith("occupied");
+    const job = { kind: "storage", id: String(writes.length), running: false, error: rejected ? "目录必须为空" : "" };
+    state.status.job = job;
+    if (!rejected) location = { ...location, directory: input.directory, backup: location.has_environment ? location.directory : "" };
+    return route.fulfill({ json: job });
+  });
+  await page.getByRole("button", { name: "选择环境存储位置" }).click();
+  const panel = page.getByRole("region", { name: "本机环境存储" });
+  const picker = panel.getByRole("button", { name: "选择文件夹" });
+  const target = panel.getByLabel("新存储位置");
+  state.chosenFolder = "";
+  await picker.click();
+  assert.equal(await target.inputValue(), "");
+  state.chosenFolder = destination;
+  await picker.click();
+  await page.waitForFunction((path) => [...document.querySelectorAll("input")].some((input) => input.value === path), destination);
+  await panel.getByRole("button", { name: "使用此位置" }).click();
+  await panel.getByText(destination, { exact: true }).waitFor();
+  assert.equal(writes[0].migrate, false);
+  location.has_environment = true;
+  await page.reload();
+  await page.getByRole("button", { name: "选择环境存储位置" }).click();
+  await panel.getByText(destination, { exact: true }).waitFor();
+  await target.fill("E:\\occupied");
+  await panel.getByRole("button", { name: "迁移到此位置" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "取消" }).click();
+  assert.equal(writes.length, 1);
+  await panel.getByRole("button", { name: "迁移到此位置" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "迁移环境" }).click();
+  await panel.getByText("目录必须为空", { exact: true }).waitFor();
+  await target.fill("E:\\Cage 环境");
+  await panel.getByRole("button", { name: "迁移到此位置" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "迁移环境" }).click();
+  await panel.getByText("E:\\Cage 环境", { exact: true }).waitFor();
+  assert.equal(writes.at(-1).migrate, true);
+  assert.equal(writes.at(-1).previous, destination);
+  assert.equal(await panel.locator("code").textContent(), destination);
+  assert.deepEqual(errors, []);
+  console.log("Storage selection, picker cancellation, migration confirmation, failure and backup location passed");
+} finally { await browser.close(); }

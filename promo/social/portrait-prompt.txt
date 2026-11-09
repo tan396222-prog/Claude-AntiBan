@@ -1,0 +1,25 @@
+Use case: ads-marketing. Create a finished, beautiful Chinese software advertisement poster for Cage, portrait 3:4 1536x2048, ready to post on Xiaohongshu. Input reference is the actual Cage logo: preserve its recognizable orange pixel creature and dark cage bars in a small top-left brand icon. This is a new ad design, not an alteration of the logo file.
+Art direction: high-end contemporary independent developer product campaign, warm ivory background #F7F3EB, nearly black expressive large Chinese sans typography, vivid vermilion orange #EF663A, tiny sage-green safety cues. Strong Swiss editorial alignment combined with playful collectible 3D product art. Crisp typography, confident asymmetry, ample space, phone-readable, no gratuitous gradients, no cyberpunk, no stock photo humans, no generic dashboard cards everywhere.
+Composition: top slim brand line with logo and Cage on left, '为 Claude 而造' right. Huge flush-left two-line headline in upper quarter. Small supporting line below. Central hero: an exquisite isometric transparent glass protective cube/cage containing the friendly orange blocky pixel mascot from logo; softly glowing orange interior, subtle brushed-metal rails and studio shadows, abstract disconnected network line outside and protected single orange route to cube, conveys isolated environment and safety. No words on illustration, no fake UI. Integrate an oversized typographic '0 元' and caption '软件使用费' beside hero, like an editorial price statement, not a sale sticker.
+Lower half: one prominent horizontal orange installation strip, then neat 2 by 2 typography-led feature blocks separated by delicate rules, simple line symbols. Bottom platform line and clear GitHub CTA. Fine print still readable.
+Render ONLY the following exact copy, preserve all Chinese characters, no other invented text:
+Brand: 'Cage' / '为 Claude 而造'
+Headline: '用 Claude，' / '少一点折腾。'
+Subtitle: '担心网络泄露？把隔离与检查交给 Cage。'
+Price: '0 元' / '软件使用费'
+Orange strip headline: '下载安装 → 配置代理 → 开始使用'
+Orange strip smaller: '环境自动准备，省去手动搭建'
+Feature 1 heading: '代理隔离，安心开工'
+Feature 1 body: '代理断开不回退直连 · 内置泄漏检查'
+Feature 2 heading: '多账号，自动分配'
+Feature 2 body: '新建 Claude Code 终端时调度'
+Feature 3 heading: '完全开源，欢迎审查'
+Feature 3 body: '代码公开 · 欢迎贡献'
+Feature 4 heading: '轻量环境，专为 Claude'
+Feature 4 body: '浏览器、终端、编辑器，一处就绪'
+Platform line: 'macOS / Windows / Linux'
+CTA: '免费获取，参与共建 ↗'
+Repository: 'github.com/tan396222-prog/Claude-AntiBan'
+Fine print in two clean lines: '代理与 Claude 服务费用另计；首次启动需下载环境。'
+'网络隔离不承诺免封号；Windows / Linux 为预览版。'
+No version numbers, no unsupported 100% security, no official Anthropic endorsement, no QR code, no watermark. All content comfortably inside safe margins. Final must look like meticulously art-directed professional social ad with strong typography, not a dense brochure.

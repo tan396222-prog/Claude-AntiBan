@@ -1,0 +1,73 @@
+From: Cage maintainers
+Subject: [PATCH] usernet: listen on native socket paths without URL parsing
+
+On Windows an absolute socket path contains a drive letter and backslashes.
+Constructing unix://C:\\... treats the drive as a URL host and rejects the
+backslashes. The endpoint is always a Unix socket; pass the path directly to
+net.Listen, which supports AF_UNIX on Windows 10 1803 and newer.
+
+diff --git a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
+--- a/pkg/networks/usernet/gvproxy.go
++++ b/pkg/networks/usernet/gvproxy.go
+@@ -20,7 +20,6 @@ import (
+ 	"time"
+ 
+ 	"github.com/balajiv113/fd"
+-	"github.com/containers/gvisor-tap-vsock/pkg/transport"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/types"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
+ 	"github.com/miekg/dns"
+@@ -166,7 +165,7 @@ func run(ctx context.Context, g *errgroup.Group, configuration *types.Configuration
+ 		return err
+ 	}
+ 
+-	ln, err := transport.Listen(fmt.Sprintf("unix://%s", opts.Endpoint))
++	ln, err := net.Listen("unix", opts.Endpoint)
+ 	if err != nil {
+ 		return err
+ 	}
+diff --git a/pkg/networks/usernet/endpoint_windows_test.go b/pkg/networks/usernet/endpoint_windows_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/networks/usernet/endpoint_windows_test.go
+@@ -0,0 +1,40 @@
++//go:build windows
++
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package usernet
++
++import (
++	"context"
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestNetstackWindowsNativeSocketPaths(t *testing.T) {
++	// A drive letter, spaces and URL punctuation must remain a file path.
++	dir, err := os.MkdirTemp("", "cage %23-")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer os.RemoveAll(dir)
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	endpoint := filepath.Join(dir, "ep.sock")
++	qemu := filepath.Join(dir, "qemu.sock")
++	if err := StartGVisorNetstack(ctx, &GVisorNetstackOpts{
++		MTU: 1500, Endpoint: endpoint, QemuSocket: qemu,
++		Subnet: "192.168.127.0/24", Async: true,
++	}); err != nil {
++		t.Fatal(err)
++	}
++	for _, path := range []string{endpoint, qemu} {
++		conn, err := net.Dial("unix", path)
++		if err != nil {
++			t.Fatalf("cannot connect to native socket %q: %v", path, err)
++		}
++		conn.Close()
++	}
++}

@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Cage
+Comment=Isolated coding workspace
+Comment[zh_CN]=隔离编码工作区
+Exec=/usr/bin/cage-desktop
+Icon=io.github.lee_xeo.Cage
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=cage-desktop

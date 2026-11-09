@@ -1,0 +1,161 @@
+Subject: [PATCH] Open Windows pflash firmware through its Unicode working directory
+
+diff --git a/pkg/driver/qemu/firmware.go b/pkg/driver/qemu/firmware.go
+new file mode 100644
+index 0000000..ad3dc48
+--- /dev/null
++++ b/pkg/driver/qemu/firmware.go
+@@ -0,0 +1,22 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import (
++	"path/filepath"
++	"unicode/utf8"
++)
++
++// The Windows QEMU build cannot reliably open a non-ASCII pflash argument.
++// CreateProcessW takes the working directory as UTF-16, so QEMU can open
++// the original firmware with its ASCII basename without making a stale copy.
++func windowsFirmwareArgument(path string) (argument, workingDir string) {
++	dir := filepath.Dir(path)
++	for _, r := range dir {
++		if r >= utf8.RuneSelf && filepath.IsAbs(path) {
++			return filepath.Base(path), dir
++		}
++	}
++	return path, ""
++}
+diff --git a/pkg/driver/qemu/firmware_test.go b/pkg/driver/qemu/firmware_test.go
+new file mode 100644
+index 0000000..01da5fe
+--- /dev/null
++++ b/pkg/driver/qemu/firmware_test.go
+@@ -0,0 +1,60 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import (
++	"os"
++	"path/filepath"
++	"runtime"
++	"testing"
++
++	"github.com/lima-vm/lima/v2/pkg/limatype"
++)
++
++func TestWindowsFirmwareArgument(t *testing.T) {
++	dir := filepath.Join(t.TempDir(), "测试安装, Cage", "share")
++	if err := os.MkdirAll(dir, 0o700); err != nil {
++		t.Fatal(err)
++	}
++	const name = "edk2-x86_64-code.fd"
++	path := filepath.Join(dir, name)
++	arg, cwd := windowsFirmwareArgument(path)
++	if arg != name || cwd != dir {
++		t.Fatalf("got argument %q and working directory %q", arg, cwd)
++	}
++	// Replacing the packaged firmware must also replace what QEMU reads.
++	for _, revision := range []string{"first release", "updated release"} {
++		if err := os.WriteFile(path, []byte(revision), 0o600); err != nil {
++			t.Fatal(err)
++		}
++		data, err := os.ReadFile(filepath.Join(cwd, arg))
++		if err != nil || string(data) != revision {
++			t.Fatalf("reading %q: got %q, %v", revision, data, err)
++		}
++	}
++}
++
++func TestWindowsPackagedFirmwareBeatsOldUserCopy(t *testing.T) {
++	if runtime.GOOS != "windows" {
++		t.Skip("Windows QEMU distribution layout")
++	}
++	root := t.TempDir()
++	home := filepath.Join(root, "用户")
++	t.Setenv("USERPROFILE", home)
++	binDir := filepath.Join(root, "安装目录", "qemu")
++	const name = "edk2-x86_64-code.fd"
++	bundled := filepath.Join(binDir, "share", name)
++	for _, path := range []string{filepath.Join(home, ".local", "share", "qemu", name), bundled} {
++		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(path, []byte(path), 0o600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	got, err := getFirmware(filepath.Join(binDir, "qemu-system-x86_64.exe"), limatype.X8664)
++	if err != nil || got != bundled {
++		t.Fatalf("selected %q instead of the packaged %q: %v", got, bundled, err)
++	}
++}
+diff --git a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
+index 2dba8c5..7fd33ab 100644
+--- a/pkg/driver/qemu/qemu.go
++++ b/pkg/driver/qemu/qemu.go
+@@ -480,6 +480,10 @@ func resolveCPUType(y *limatype.LimaYAML, qemuVersion *semver.Version) string {
+ }
+ 
+ func Cmdline(ctx context.Context, cfg Config) (exe string, args []string, err error) {
++	return cmdline(ctx, cfg, nil)
++}
++
++func cmdline(ctx context.Context, cfg Config, workingDir *string) (exe string, args []string, err error) {
+ 	y := cfg.LimaYAML
+ 	exe, args, err = Exe(*y.Arch)
+ 	if err != nil {
+@@ -647,7 +651,11 @@ func Cmdline(ctx context.Context, cfg Config) (exe string, args []string, err er
+ 			logrus.Infof("Using system firmware (%#q)", firmware)
+ 		}
+ 		if firmware != "" {
+-			args = append(args, "-drive", fmt.Sprintf("if=pflash,format=raw,readonly=on,file=%s", firmware))
++			if runtime.GOOS == "windows" && workingDir != nil {
++				firmware, *workingDir = windowsFirmwareArgument(firmware)
++			}
++			// Commas in -drive filenames are escaped by doubling them.
++			args = append(args, "-drive", "if=pflash,format=raw,readonly=on,file="+strings.ReplaceAll(firmware, ",", ",,"))
+ 		}
+ 	}
+ 
+@@ -1315,6 +1323,14 @@ func getFirmware(qemuExe string, arch limatype.Arch) (string, error) {
+ 
+ 	relativePath := fmt.Sprintf("share/qemu/edk2-%s-code.fd", qemuEdk2Arch(arch))
+ 	relativePathWin := fmt.Sprintf("share/edk2-%s-code.fd", qemuEdk2Arch(arch))
++	if runtime.GOOS == "windows" {
++		// The firmware shipped beside QEMU belongs to that QEMU version.
++		// Prefer it over an old manual copy in the user's .local directory.
++		bundled := filepath.Join(binDir, relativePathWin)
++		if _, err := os.Stat(bundled); err == nil || !errors.Is(err, os.ErrNotExist) {
++			return bundled, err
++		}
++	}
+ 	candidates := []string{
+ 		filepath.Join(userLocalDir, relativePath), // XDG-like
+ 		filepath.Join(localDir, relativePath),     // macOS (homebrew)
+diff --git a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
+index dba8221..6c982cc 100644
+--- a/pkg/driver/qemu/qemu_driver.go
++++ b/pkg/driver/qemu/qemu_driver.go
+@@ -422,7 +422,8 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
+ 			socks.dgramConn.Close()
+ 		}
+ 	}()
+-	qExe, qArgs, err := Cmdline(ctx, qCfg)
++	var workingDir string
++	qExe, qArgs, err := cmdline(ctx, qCfg, &workingDir)
+ 	if err != nil {
+ 		return nil, err
+ 	}
+@@ -468,6 +469,7 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
+ 		qArgsFinal = append(qArgsFinal, applied)
+ 	}
+ 	qCmd := exec.CommandContext(ctx, qExe, qArgsFinal...)
++	qCmd.Dir = workingDir
+ 	qCmd.ExtraFiles = append(qCmd.ExtraFiles, applier.files...)
+ 	qCmd.SysProcAttr = executil.BackgroundSysProcAttr
+ 	qStdout, err := qCmd.StdoutPipe()

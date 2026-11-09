@@ -1,0 +1,29 @@
+# Everything is LF in the working tree, on Windows too: a CRLF checkout breaks
+# bash scripts and the tests that compare files byte for byte.
+* text=auto eol=lf
+
+# Shell scripts must keep LF endings everywhere: a CRLF checkout on
+# Windows breaks bash.
+*.sh text eol=lf
+/scripts/* text eol=lf
+/tests/sftp/run text eol=lf
+
+# Go files too: a CRLF checkout on Windows breaks the tests that compare
+# them byte for byte (limaembed's copy of limactl's hostagent command).
+*.go text eol=lf
+
+# Checked byte for byte by scripts/licenses --check.
+/THIRD_PARTY_LICENSES text eol=lf
+
+# Images are binary, and the recorded outputs and fuzz corpora of the tests
+# are never converted.
+*.png binary
+*.gz binary
+/internal/*/testdata/** -text
+/tests/sftp/testdata/** -text
+
+# Byte for byte as upstream and the patches have them: no line ending
+# conversion, or the patches stop applying and the sync check fails.
+/third_party/** -text -whitespace
+/patches/** -text -whitespace
+/ui/vendor/** -text -whitespace

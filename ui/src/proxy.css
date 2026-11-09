@@ -1,0 +1,591 @@
+.proxy-manager {
+  margin-bottom: 28px;
+}
+.proxy-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-content .proxy-heading h3 {
+  margin: 0;
+}
+.proxy-heading + p {
+  margin-top: 10px;
+}
+.proxy-heading .proxy-help-toggle {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  color: var(--muted);
+}
+.proxy-help-toggle[aria-expanded="true"] {
+  color: var(--strong);
+  background: color-mix(in srgb, currentColor 8%, transparent);
+}
+.proxy-help-toggle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.proxy-help {
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  font-size: 13px;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.settings-content .proxy-help h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+.proxy-help p {
+  margin: 6px 0 0;
+}
+.proxy-help-intro,
+.proxy-help-notes {
+  color: var(--muted);
+}
+.proxy-help-steps {
+  margin: 16px 0;
+  padding-left: 22px;
+}
+.proxy-help-steps > li + li {
+  margin-top: 14px;
+}
+.proxy-help-steps ul {
+  padding-left: 18px;
+  margin-top: 8px;
+}
+.proxy-help-steps ul > li + li {
+  margin-top: 8px;
+}
+.proxy-help-notes {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+.proxy-summary {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin: 18px 0 10px;
+}
+.proxy-summary > div {
+  flex: 1;
+  min-width: 0;
+}
+.proxy-summary strong,
+.proxy-summary span,
+.proxy-source small,
+.proxy-node small,
+.proxy-connection small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.proxy-summary > div > span {
+  font-size: 12px;
+  opacity: 0.65;
+  margin-top: 5px;
+}
+.proxy-badge {
+  padding: 4px 9px;
+  background: color-mix(in srgb, currentColor 6%, transparent);
+  border-radius: 20px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.proxy-badge.online {
+  color: var(--success);
+  background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+.proxy-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin: 20px 0 16px;
+  padding-bottom: 7px;
+}
+.proxy-tabs button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  opacity: 0.6;
+  padding: 7px 13px;
+}
+.proxy-tabs button[aria-selected="true"],
+.proxy-tabs button.selected {
+  opacity: 1;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  border-radius: 6px;
+}
+.proxy-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  flex-wrap: wrap;
+}
+.proxy-toolbar > span {
+  margin-right: auto;
+  opacity: 0.65;
+  font-size: 12px;
+}
+.proxy-toolbar .inline-select {
+  max-width: 150px;
+}
+.settings-content
+  .proxy-manager
+  .proxy-toolbar
+  label.proxy-search:not(.check-line) {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-width: 150px;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+}
+.settings-content
+  .proxy-manager
+  .proxy-toolbar
+  label.proxy-search:not(.check-line)
+  input {
+  margin: 0;
+}
+.proxy-node-list {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.proxy-node {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-right: 8px;
+  gap: 8px;
+}
+.proxy-node:last-child {
+  border-bottom: 0;
+}
+.proxy-node.selected {
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.proxy-node-choice {
+  display: flex;
+  justify-content: flex-start;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+  padding: 14px 12px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+  color: inherit;
+}
+.proxy-node-choice > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.proxy-node-choice strong {
+  font-size: 13px;
+  font-weight: 550;
+}
+.proxy-node small,
+.proxy-source small,
+.proxy-connection small {
+  opacity: 0.6;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.proxy-radio {
+  width: 16px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+}
+.proxy-node.selected .proxy-radio {
+  background: var(--strong);
+  color: var(--paper);
+}
+.proxy-delay {
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+.proxy-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px 12px;
+  gap: 10px;
+  text-align: center;
+}
+.proxy-empty p {
+  font-size: 12px;
+  opacity: 0.65;
+  margin: 0;
+}
+.proxy-source {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.proxy-source > div:first-child {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.proxy-source strong {
+  font-size: 13px;
+}
+.proxy-source-actions {
+  display: flex;
+  gap: 4px;
+}
+.proxy-source-actions button {
+  padding: 7px;
+}
+.proxy-source-error {
+  font-size: 12px;
+  color: var(--danger, #bc4c4c);
+  display: block;
+  margin-top: 6px;
+}
+.proxy-import {
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.proxy-import h4 {
+  margin: 0 0 16px;
+}
+.proxy-import .proxy-tabs {
+  margin-top: 0;
+}
+.proxy-import textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  background: var(--input-bg, var(--paper));
+  color: inherit;
+  border: 1px solid var(--line);
+  padding: 10px;
+  border-radius: 7px;
+  font: 12px/1.6 var(--font-mono, monospace);
+}
+.proxy-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+.proxy-migration {
+  margin-top: 20px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+.proxy-migration summary {
+  cursor: pointer;
+}
+.proxy-metrics {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  border: 1px solid var(--line);
+  padding: 18px;
+  border-radius: 10px;
+}
+.proxy-metrics span {
+  font-size: 12px;
+}
+.proxy-metrics strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 500;
+  margin: 6px 0;
+}
+.proxy-metrics small {
+  opacity: 0.6;
+}
+.proxy-metrics + .field-help {
+  margin-top: 10px;
+}
+.proxy-connection {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+.proxy-diagnostics {
+  padding: 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  font-size: 12px;
+  line-height: 1.8;
+  margin-bottom: 18px;
+  overflow-wrap: anywhere;
+}
+.proxy-progress,
+.proxy-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.proxy-notice {
+  color: var(--success);
+}
+.proxy-loading {
+  padding: 20px 0;
+}
+.external-proxy {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+}
+.external-proxy > summary {
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: 18px;
+}
+@media (max-width: 900px) {
+  .proxy-node-choice {
+    padding: 12px 8px;
+    gap: 8px;
+  }
+  .proxy-summary {
+    padding: 12px;
+  }
+  .proxy-source {
+    align-items: flex-start;
+  }
+  .proxy-toolbar .inline-select {
+    max-width: 120px;
+  }
+}
+
+.proxy-route {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 18px;
+  margin-bottom: 24px;
+}
+.proxy-route-heading,
+.proxy-route-actions,
+.proxy-node-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.settings-content .proxy-route h4,
+.settings-content .proxy-node-heading h4 {
+  margin: 0;
+  font-size: 14px;
+}
+.proxy-route-heading p {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.proxy-route-mode {
+  display: flex;
+  flex-shrink: 0;
+  gap: 3px;
+  padding: 3px;
+  background: color-mix(in srgb, currentColor 5%, transparent);
+  border-radius: 8px;
+}
+.proxy-route-mode button {
+  border: 0;
+  background: transparent;
+  padding: 7px 12px;
+  color: var(--muted);
+  transition:
+    background 140ms,
+    color 140ms;
+}
+.proxy-route-mode button[aria-pressed="true"] {
+  background: var(--paper);
+  color: var(--strong);
+  box-shadow: 0 1px 3px #00000012;
+}
+.proxy-route-hops {
+  list-style: none;
+  padding: 0;
+  margin: 18px 0 14px;
+}
+.proxy-route-hop {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  position: relative;
+  padding-bottom: 16px;
+  animation: proxy-hop-in 160ms ease-out;
+}
+.proxy-route-hop:last-child {
+  padding-bottom: 0;
+}
+.proxy-route-hop:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  top: 29px;
+  bottom: 5px;
+  left: 12px;
+  width: 1px;
+  background: var(--line);
+}
+.proxy-hop-number {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  margin-top: 2px;
+  flex: none;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 12px;
+  color: var(--muted);
+}
+.is-exit .proxy-hop-number {
+  background: var(--strong);
+  border-color: var(--strong);
+  color: var(--paper);
+}
+.proxy-hop-control {
+  flex: 1;
+  min-width: 0;
+}
+.settings-content
+  .proxy-manager
+  .proxy-hop-control
+  label:not(.check-line):not(.choice):not(.toggle-row) {
+  margin: 3px 0 7px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.proxy-hop-control .inline-select {
+  display: block;
+  width: 100%;
+}
+.proxy-hop-control .inline-select-trigger {
+  width: 100%;
+  text-align: left;
+}
+.proxy-hop-control small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 7px;
+}
+.proxy-hop-remove {
+  flex: none;
+  margin-top: 28px;
+}
+.proxy-route-add {
+  margin-left: 37px;
+  margin-bottom: 16px;
+}
+.proxy-route-preview {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 15px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.proxy-route-preview svg {
+  flex: none;
+}
+.proxy-route-preview strong {
+  color: var(--strong);
+  font-weight: 500;
+}
+.proxy-route-actions {
+  margin-top: 18px;
+}
+.proxy-route-actions > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.proxy-route-actions > div {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.proxy-route-actions .primary {
+  transition: background 140ms;
+}
+.proxy-node-role {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.proxy-summary .proxy-current-route {
+  font-size: 12px;
+  line-height: 1.6;
+  opacity: 1;
+  color: var(--muted);
+}
+@keyframes proxy-hop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@media (max-width: 700px) {
+  .proxy-route {
+    padding: 14px;
+  }
+  .proxy-route-heading,
+  .proxy-route-actions {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .proxy-route-mode,
+  .proxy-route-actions > div {
+    width: 100%;
+  }
+  .proxy-route-mode button,
+  .proxy-route-actions > div button {
+    flex: 1;
+  }
+  .proxy-node-role {
+    display: none;
+  }
+  .proxy-route-preview {
+    gap: 5px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proxy-route-hop {
+    animation: none;
+  }
+  .proxy-route-mode button,
+  .proxy-route-actions .primary {
+    transition: none;
+  }
+}

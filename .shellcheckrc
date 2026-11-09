@@ -1,0 +1,2 @@
+# `CDPATH= cd` is meant: an empty value for that command only.
+disable=SC1007

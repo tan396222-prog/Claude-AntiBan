@@ -1,0 +1,109 @@
+Subject: [PATCH] Route cage TCP and DNS through host-owned transports
+
+Optional transport hooks retain the upstream default. DNS exchange failures
+return SERVFAIL without invoking the host resolver. Cage supplies a proxy-only
+TCP dialer and DoH exchange outside the guest.
+
+---
+diff --git a/pkg/hostagent/dns/dns.go b/pkg/hostagent/dns/dns.go
+index 7d1e75d..fd676b8 100644
+--- a/pkg/hostagent/dns/dns.go
++++ b/pkg/hostagent/dns/dns.go
+@@ -150,7 +150,20 @@ func NewHandler(opts HandlerOptions) (dns.Handler, error) {
+ 	return h, nil
+ }
+ 
++// Exchange overrides upstream resolution; a failed exchange returns SERVFAIL.
++var Exchange func(context.Context, *dns.Msg) (*dns.Msg, error)
++
+ func (h *Handler) handleQuery(ctx context.Context, w dns.ResponseWriter, req *dns.Msg) {
++	if Exchange != nil {
++		defer w.Close()
++		answer, err := Exchange(ctx, req)
++		if err != nil {
++			answer = new(dns.Msg)
++			answer.SetRcode(req, dns.RcodeServerFailure)
++		}
++		_ = w.WriteMsg(answer)
++		return
++	}
+ 	var (
+ 		reply   dns.Msg
+ 		handled bool
+diff --git a/pkg/networks/usernet/gvproxy.go b/pkg/networks/usernet/gvproxy.go
+index ff4260c..90254db 100644
+--- a/pkg/networks/usernet/gvproxy.go
++++ b/pkg/networks/usernet/gvproxy.go
+@@ -22,6 +22,7 @@ import (
+ 	"github.com/containers/gvisor-tap-vsock/pkg/transport"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/types"
+ 	"github.com/containers/gvisor-tap-vsock/pkg/virtualnetwork"
++	"github.com/miekg/dns"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sync/errgroup"
+ )
+@@ -54,6 +55,23 @@ const gatewayMacAddr = "5a:94:ef:e4:0c:dd"
+ // The host services the guest needs (AllowHostService) are reached past it.
+ var Outbound types.Outbound
+ 
++// GuestDial and DNSExchange are host-owned transport hooks.
++var GuestDial types.DialContext
++var DNSExchange func(context.Context, *dns.Msg) (*dns.Msg, error)
++
++func dialGuest(ctx context.Context, network, addr string) (net.Conn, error) {
++	if GuestDial == nil {
++		return (&net.Dialer{}).DialContext(ctx, network, addr)
++	}
++	dst, err := netip.ParseAddrPort(addr)
++	if err == nil && dst.Addr().Unmap() == netip.MustParseAddr("127.0.0.1") {
++		if _, ok := hostServices.Load(hostService{network, dst.Port()}); ok {
++			return (&net.Dialer{}).DialContext(ctx, network, addr)
++		}
++	}
++	return GuestDial(ctx, network, addr)
++}
++
+ // Names and Answered, when set by the program running the hostagent, are
+ // applied by the gateway's DNS server of the per-instance netstacks to every
+ // query it gets (types.Configuration.DNSNames and DNSAnswered).
+@@ -125,6 +143,8 @@ func StartGVisorNetstack(ctx context.Context, gVisorOpts *GVisorNetstackOpts) er
+ 		},
+ 		GatewayVirtualIPs: []string{gatewayIP},
+ 		Outbound:          outbound,
++		DialContext:       dialGuest,
++		DNSExchange:       DNSExchange,
+ 		DNSNames:          Names,
+ 		DNSAnswered:       Answered,
+ 	}
+diff --git a/pkg/hostagent/dns/cage_test.go b/pkg/hostagent/dns/cage_test.go
+new file mode 100644
+index 0000000..5e16ce3
+--- /dev/null
++++ b/pkg/hostagent/dns/cage_test.go
+@@ -0,0 +1,26 @@
++// SPDX-License-Identifier: Apache-2.0
++package dns
++
++import (
++	"context"
++	"errors"
++	"testing"
++
++	"github.com/miekg/dns"
++)
++
++func TestCageDNSFailureDoesNotUseStaticOrHostResolver(t *testing.T) {
++	previous := Exchange
++	t.Cleanup(func() { Exchange = previous })
++	Exchange = func(context.Context, *dns.Msg) (*dns.Msg, error) { return nil, errors.New("proxy down") }
++	h, err := NewHandler(HandlerOptions{StaticHosts: map[string]string{"example.com": "1.1.1.1"}})
++	if err != nil {
++		t.Fatal(err)
++	}
++	q := new(dns.Msg)
++	q.SetQuestion("example.com.", dns.TypeA)
++	h.ServeDNS(TestResponseWriter{}, q)
++	if dnsResult.Rcode != dns.RcodeServerFailure || len(dnsResult.Answer) != 0 {
++		t.Fatal("expected SERVFAIL without static/host fallback")
++	}
++}

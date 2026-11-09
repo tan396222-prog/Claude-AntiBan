@@ -1,0 +1,14 @@
+{
+  "architecture": "amd64",
+  "mihomo": {
+    "version": "v1.19.33",
+    "file": "mihomo-linux-amd64-compatible-v1.19.33.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz",
+    "sha256": "386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6"
+  },
+  "mihomoSource": {
+    "file": "mihomo-v1.19.33-source.tar.gz",
+    "url": "https://github.com/MetaCubeX/mihomo/archive/refs/tags/v1.19.33.tar.gz",
+    "sha256": "e7c596b37ff27ec487d19b1920f73e0c97a78067ea35766530ee9659ade72711"
+  }
+}
