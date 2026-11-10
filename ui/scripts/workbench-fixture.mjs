@@ -5,19 +5,26 @@ const require = createRequire(import.meta.url);
 export async function createWorkbench({
   viewport = { width: 1280, height: 850 },
   recordVideo,
+  deviceScaleFactor = 1,
   favoritesRequest,
+  browserRequest,
   mockWebSockets = true,
   url,
   nativeRequest,
   clientRequest,
+  cliRequest,
+  beforeNavigate,
+  launchOptions = {},
   startupFailure = false,
+  waitForReady = true,
+  initialization = { required: false },
   clientContext = { mode: "local", connection_id: "local", client_platform: "darwin", server_platform: "darwin", connection: { state: "disconnected" } },
 } = {}) {
   const engines = require(
     process.env.CAGE_PLAYWRIGHT_MODULE || "playwright",
   );
-  const browser = await engines[process.env.CAGE_TEST_BROWSER || "chromium"].launch({ headless: true, executablePath: process.env.CAGE_TEST_BROWSER_PATH });
-  const context = await browser.newContext({ viewport, recordVideo });
+  const browser = await engines[process.env.CAGE_TEST_BROWSER || "chromium"].launch({ headless: true, executablePath: process.env.CAGE_TEST_BROWSER_PATH, ...launchOptions });
+  const context = await browser.newContext({ viewport, recordVideo, deviceScaleFactor });
   const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
@@ -52,6 +59,7 @@ export async function createWorkbench({
     saves: [],
     requests: [],
     terminalConnections: 0,
+    initialization: structuredClone(initialization),
     account: { exists: true, unlocked: true, username: "林间工作室", avatar: "" },
     accountPassword: "fixture-password",
     failAccountSave: false,
@@ -111,10 +119,15 @@ export async function createWorkbench({
   await page.route("**/api/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname.replace("/api", "");
-    const body = request.postDataJSON();
+    const body = request.headers()["content-type"]?.includes("application/json") ? request.postDataJSON() : undefined;
     state.requests.push({ path, method: request.method(), body: path.startsWith("/account") ? undefined : body });
     if (clientRequest && path.startsWith("/client/")) return clientRequest(route, path, body);
     if (path === "/client/context") return route.fulfill({ json: clientContext });
+    if (path === "/environment/initialization") {
+      if (body?.action === "install") state.initialization.started = true;
+      if (body?.action === "complete") state.initialization.required = false;
+      return route.fulfill({ json: state.initialization });
+    }
     const accountView = () => ({ ...state.account, background_running: state.status.vm_running });
     if (path === "/account") return route.fulfill({ json: accountView() });
     if (path.startsWith("/account/")) {
@@ -125,7 +138,7 @@ export async function createWorkbench({
         Object.assign(state.account, { exists: true, unlocked: true, username: body.username.trim(), avatar: body.avatar || "" });
         state.accountPassword = body.password;
       } else if (action === "unlock") {
-        if (body.password !== state.accountPassword) return route.fulfill({ status: 400, body: "密码不正确" });
+        if (body.password !== state.accountPassword) return route.fulfill({ status: 400, contentType: "text/plain; charset=utf-8", body: "密码不正确" });
         state.account.unlocked = true;
         state.account.require_authentication = false;
       } else if (action === "profile") {
@@ -149,6 +162,13 @@ export async function createWorkbench({
       return route.fulfill({ json: accountView() });
     }
     if (!state.account.unlocked && !["/session", "/launch", "/appearance"].includes(path)) return route.fulfill({ status: 423, body: "Cage 已锁定，请先登录" });
+    if (browserRequest && path.startsWith("/browser/") && path !== "/browser/events") return browserRequest(route, path, body);
+    if (path.startsWith("/cli/")) {
+      if (cliRequest) return cliRequest(route, path, body);
+      const account = path.match(/^\/cli\/sessions\/([^/]+)\/account$/);
+      if (account) return route.fulfill({ json: { session: { id: account[1] }, supported: false, candidates: [] } });
+      return route.fulfill({ json: { sessions: [], notice: "" } });
+    }
     if (startupFailure && path === "/status") return route.fulfill({ status: 503, body: "测试：控制服务暂不可用" });
     let result = {};
     if (path === "/favorites") {
@@ -210,8 +230,15 @@ export async function createWorkbench({
       result = state.settings;
     else if (path === "/status")
       result = { ...state.status, workspace: state.settings.workspace };
+    else if (path === "/projects/remove") {
+      if (!body.workspace || body.workspace === state.status.environment_directory) return route.fulfill({ status: 400, body: "默认工作区保留" });
+      if (state.failRemove || state.terminals.some(terminal => terminal.workspace === body.workspace && !terminal.closed) || state.tabs.some(tab => tab.kind === "editor" && tab.workspace === body.workspace)) return route.fulfill({ status: 409, contentType: "text/plain; charset=utf-8", body: "请先关闭此项目的终端和编辑器，再移除项目" });
+      state.status.projects = state.status.projects.filter(path => path !== body.workspace);
+      if (state.settings.workspace === body.workspace) state.settings.workspace = state.status.environment_directory;
+      result = { workspace: state.settings.workspace };
+    }
     else if (path === "/projects/open") {
-      if (state.failJob) return route.fulfill({ status: 400, body: "项目文件夹连接失败，原项目保持不变" });
+      if (state.failJob) return route.fulfill({ status: 400, contentType: "text/plain; charset=utf-8", body: "项目文件夹连接失败，原项目保持不变" });
       if (!body.add && !state.status.projects.includes(body.workspace)) return route.fulfill({ status: 400, body: "请选择已授权的项目" });
       if (body.add && !state.status.projects.includes(body.workspace)) state.status.projects.push(body.workspace);
       if (body.activate) {
@@ -225,7 +252,8 @@ export async function createWorkbench({
       if (state.failSave)
         return route.fulfill({
           status: 400,
-          json: { error: "保存失败，请重试" },
+          contentType: "text/plain; charset=utf-8",
+          body: "保存失败，请重试",
         });
       const id = "job-" + ++state.sequence;
       const switching = state.settings.workspace !== body.workspace;
@@ -274,6 +302,19 @@ export async function createWorkbench({
         contentType: "text/event-stream",
         body: ": fixture\n\n",
       });
+    else if (path === "/browser/preferences") {
+      if (request.method() === "POST") {
+        if (state.failSave) return route.fulfill({ status: 500, body: "浏览器设置保存失败，请重试" });
+        state.settings.browser_home_url = body.browser_home_url;
+      }
+      result = { browser_home_url: state.settings.browser_home_url };
+    }
+    else if (path === "/browser/settings") {
+      let tab = state.tabs.find(tab => tab.kind === "browser-settings");
+      if (!tab) { tab = { id: "browser-settings", kind: "browser-settings", title: "设置", url: "cage://settings#general" }; state.tabs.push(tab); }
+      tab.url = "cage://settings#" + (body?.mode || "general"); state.active = tab.id; result = tab;
+    }
+    else if (path === "/browser/extensions") result = { items: [] };
     else if (path === "/vnc-credentials") result = { password: "fixture-only" };
     else if (path === "/terminals" && request.method() === "GET")
       result = state.terminals;
@@ -344,12 +385,13 @@ export async function createWorkbench({
       };
     return route.fulfill({ json: result });
   });
+  if (beforeNavigate) await beforeNavigate(page, state);
   await page.goto(url || process.env.CAGE_UI_URL || "http://127.0.0.1:5198");
-  if (!startupFailure && clientContext.mode !== "none") await page.getByRole("heading", { name: "先启动 Cage 环境" }).waitFor();
+  if (waitForReady && !startupFailure && !state.status.vm_running && clientContext.mode !== "none") await page.getByRole("heading", { name: state.initialization.required ? state.initialization.started ? "安装并检查客机环境" : "为 Cage 准备独立环境" : "先启动 Cage 环境" }).waitFor();
   return { browser, context, page, state, errors };
 }
 
 export async function chooseInline(picker, value) {
   await picker.click();
-  await picker.locator("..").getByRole("option").and(picker.page().locator(`[data-value=${JSON.stringify(String(value))}]`)).click();
+  await picker.page().getByRole("option").and(picker.page().locator(`[data-value=${JSON.stringify(String(value))}]`)).click();
 }

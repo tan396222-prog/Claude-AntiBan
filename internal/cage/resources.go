@@ -15,6 +15,7 @@ import (
 
 	"github.com/sylvinus/agent-vm/internal/diagnostics"
 	"github.com/sylvinus/agent-vm/internal/host"
+	"github.com/sylvinus/agent-vm/internal/usererror"
 )
 
 // ResourceLimits keeps the existing host-share policy while replacing the fixed
@@ -230,11 +231,17 @@ func StartResourceManager(parent context.Context, dir string, maximum uint64, cp
 				}
 			}
 			now := time.Now()
+			detail := ""
 			status.UpdatedAt, status.HostPressure = now, host.MemoryPressure()
 			target := p.target
 			if err != nil {
 				p.idleSince = time.Time{}
-				status.Error = "资源采样暂时不可用，已暂停内存回收"
+				cause := usererror.Reason(err)
+				if cause == "" {
+					cause = "环境未能返回完整有效的内存与 CPU 数据"
+				}
+				status.Error = "读取资源用量失败：" + cause + "。自动回收内存已暂停；若持续出现，请在设置中导出诊断包。"
+				detail = fmt.Sprintf("%s: %v", status.Error, err)
 				// A stalled guest may itself be out of memory. Restore its budget
 				// without relying on a command that needs guest RAM to execute.
 				if !status.HostPressure {
@@ -265,17 +272,18 @@ func StartResourceManager(parent context.Context, dir string, maximum uint64, cp
 				e := set(changeCtx, target)
 				finish()
 				if e != nil {
-					status.Error = "内存目标未能应用，保持当前配置"
+					status.Error = "调整环境内存失败：虚拟机没有接受新的内存目标，当前分配保持不变。请在设置中导出诊断包。"
+					detail = fmt.Sprintf("%s: %v", status.Error, e)
 				} else {
 					p.target, status.Target = target, target
 					diagnostics.Log("info", "resources", fmt.Sprintf("memory target=%d maximum=%d", target, maximum))
 				}
 			}
-			if status.Error != lastError {
-				if status.Error != "" {
-					diagnostics.Log("warn", "resources", status.Error)
+			if detail != lastError {
+				if detail != "" {
+					diagnostics.Log("warn", "resources", detail)
 				}
-				lastError = status.Error
+				lastError = detail
 			}
 			if e := writeResourceStatus(dir, status); e != nil && lastError != "status write failed" {
 				diagnostics.Log("warn", "resources", "resource status write failed")

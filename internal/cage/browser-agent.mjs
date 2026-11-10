@@ -1,3 +1,4 @@
+import { createTailnetClient } from "./tailnet-client.mjs";
 // Chromium is controlled through inherited pipes, never an exposed CDP port.
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -8,7 +9,11 @@ import http from "node:http";
 import { auditBrowser } from "./browser-audit.mjs";
 import { BrowserVault } from "./browser-vault.mjs";
 import { LoginBrowser } from "./browser-login.mjs";
+import { PrivateBrowser } from "./browser-private.mjs";
+import { browserCookies } from "./browser-cookies.mjs";
+import { BrowserExtensions, extensionUploadLimit } from "./browser-extensions.mjs";
 import { BrowserClipboard } from "./browser-clipboard.mjs";
+import { BrowserVisibility } from "./browser-visibility.mjs";
 import { nativeInput } from "./native-input.mjs";
 import { DownloadManager } from "./browser-downloads.mjs";
 import { UploadManager, uploadLimit } from "./browser-uploads.mjs";
@@ -17,6 +22,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 const config = JSON.parse(
   readFileSync("/etc/claude-cage/browser-control.json", "utf8"),
 );
+const displayScale = config.display_scale === 1.5 ? 1.5 : 2;
 const selectionFile = "/home/cage-browser/workbench-state.json";
 const homepageFile = "/home/cage-browser/homepage.json";
 let homeURL = "https://www.bing.com/";
@@ -29,7 +35,7 @@ try {
 } catch {}
 function rememberSelection() {
   const tab = targets.get(activeId);
-  if (tab && !tab.login)
+  if (tab && !tab.login && !tab.incognito)
     try {
       writeFileSync(selectionFile, JSON.stringify({ url: tab.url }), {
         mode: 0o600,
@@ -42,20 +48,26 @@ const splitDirectory = "/usr/local/lib/cage-split";
 const extensionId = createHash("sha256").update(splitDirectory).digest("hex").slice(0, 32)
   .replace(/./g, c => String.fromCharCode(97 + parseInt(c, 16)));
 const splitURL = `chrome-extension://${extensionId}/control.html`;
-let splitView = null, splitSession, splitOpening, resizeTimer;
+const settingsURL = `chrome-extension://${extensionId}/settings.html`;
+const extensionRepairURL = "chrome://extensions/?cage-browser-controller";
+const isSettingsTab = tab => tab.url === settingsURL || tab.url.startsWith(settingsURL + "#");
+const publicURL = tab => isSettingsTab(tab) ? "cage://settings" + new URL(tab.url).hash : tab.url;
+let splitView = null, splitSession, splitTarget, splitOpening, resizeTimer;
 const favicons = new Map(), faviconRequests = new Map(), documents = new Map();
 
 function isBrowserTab(target) {
   return target.type === "page" && target.url !== splitURL &&
-    !target.url.startsWith("devtools://") && !auditContexts.has(target.browserContextId);
+    target.url !== extensionRepairURL &&
+    !target.url.startsWith("devtools://") && !auditExclusions.has(target.browserContextId) &&
+    !auditExclusions.has(target.targetId) && !auditExclusions.has(target.url);
 }
 
 const flags = [
   `--load-extension=${splitDirectory}`,
   "--user-data-dir=/home/cage-browser/profile",
   "--remote-debugging-pipe",
-  // The pipe manages tabs for a human-operated browser. Keep it private while
-  // preventing its presence alone from enabling Blink's automation marker.
+  // The pipe carries user interaction. Set this before any document is created
+  // so normal pages, login popups and private contexts share the native getter.
   "--disable-blink-features=AutomationControlled",
   // Kiosk mode blocks Chromium's DevTools UI, including F12. Ordinary
   // fullscreen keeps the guest browser chrome hidden while allowing inspection.
@@ -66,11 +78,12 @@ const flags = [
   "--disable-quic",
   "--disable-session-crashed-bubble",
   "--window-size=1440,900",
-  "--force-device-scale-factor=2",
+  `--force-device-scale-factor=${displayScale}`,
   `--lang=${process.env.CAGE_LANGUAGE || "en-US"}`,
+  `--accept-lang=${process.env.CAGE_LANGUAGE || "en-US"}`,
 ];
-if (!existsSync("/home/cage-browser/profile/Default/Sessions"))
-  flags.push(homeURL);
+const freshProfile = !existsSync("/home/cage-browser/profile/Default/Sessions");
+if (freshProfile) flags.push("about:blank");
 const chrome = spawn("/usr/bin/chromium", flags, {
   stdio: ["ignore", "ignore", "inherit", "pipe", "pipe"],
 });
@@ -81,11 +94,40 @@ let sequence = 0,
 let shuttingDown = false;
 const events = new Set();
 let navigation = { id: "", back: false, forward: false }, navigationSequence = 0;
-const auditContexts = new Set();
+// Context IDs and unique blank-page URLs are registered before target creation.
+const auditExclusions = new Set();
+const auditCreations = new Set(), deferredTargetInfo = new Map();
 const loginBrowser = new LoginBrowser(cdp);
+const privateBrowser = new PrivateBrowser(cdp, downloadPath);
+const browserExtensions = new BrowserExtensions({ directory: "/home/cage-browser", cdp, control: splitController, protectedID: extensionId });
 const pending = new Map(),
   targets = new Map(),
   sessions = new Map();
+const closingTargets = new Map();
+let browserVNCViewers = false;
+function canHideBrowser() {
+  // Legacy viewers connect directly to the loopback VNC server. Keep their
+  // window visible after the last managed workbench viewer disconnects.
+  for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
+    const entries = readFileSync(file, "utf8").trim().split("\n").slice(1);
+    if (entries.some(line => {
+      const fields = line.trim().split(/\s+/);
+      return fields[3] === "01" && fields[1].endsWith(":3E1C");
+    })) { browserVNCViewers = true; return false; }
+  }
+  browserVNCViewers = false;
+  return true;
+}
+const visibility = new BrowserVisibility(cdp, () => [...targets.keys()], canHideBrowser);
+let checkingBrowserViewers = false;
+setInterval(() => {
+  if (!ready || visibility.visible || checkingBrowserViewers) return;
+  const previous = browserVNCViewers;
+  try { canHideBrowser(); } catch { return; }
+  if (previous === browserVNCViewers) return;
+  checkingBrowserViewers = true;
+  void visibility.set(false).catch(() => {}).finally(() => { checkingBrowserViewers = false; });
+}, 1000).unref();
 const browserClipboard = new BrowserClipboard(cdp, ({ id, text, context }) => {
   if (id !== activeId || !targets.has(id)) return;
   const payload = "event: clipboard\ndata: " + JSON.stringify({ id, text, context }) + "\n\n";
@@ -127,6 +169,42 @@ function cdp(method, params = {}, sessionId, timeout = 4500) {
       }) + "\0",
     );
   });
+}
+
+function updateTargetInfo(t) {
+  if (!isBrowserTab(t)) return;
+  const fresh = !targets.has(t.targetId);
+  targets.set(t.targetId, privateBrowser.tab(loginBrowser.tab(t, targets.get(t.targetId))));
+  if (fresh) void session(t.targetId).catch(() => {});
+  if (t.targetId === activeId) rememberSelection();
+  broadcastState();
+  if (!activeId) activeId = t.targetId;
+  if (ready && fresh && t.openerId)
+    void activate(t.targetId, true).catch(() => {});
+  else if (ready && fresh && !visibility.visible)
+    void visibility.set(false).catch(() => {});
+}
+
+async function auditCDP(method, params, ...args) {
+  if (method !== "Target.createTarget" || params.browserContextId)
+    return cdp(method, params, ...args);
+  // Chromium initially announces a background tab as about:blank, before its
+  // diagnostic URL or creation reply. Delay classification until its ID is known.
+  let complete;
+  const creating = new Promise(resolve => { complete = resolve; });
+  auditCreations.add(creating);
+  try {
+    const result = await cdp(method, params, ...args);
+    auditExclusions.add(result.targetId);
+    return result;
+  } finally {
+    auditCreations.delete(creating);
+    if (!auditCreations.size) {
+      for (const t of deferredTargetInfo.values()) updateTargetInfo(t);
+      deferredTargetInfo.clear();
+    }
+    complete();
+  }
 }
 chrome.stdio[4].on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk]);
@@ -174,19 +252,22 @@ chrome.stdio[4].on("data", (chunk) => {
       event.method === "Target.targetInfoChanged"
     ) {
       const t = p.targetInfo;
-      if (isBrowserTab(t)) {
-        const fresh = !targets.has(t.targetId);
-        targets.set(t.targetId, loginBrowser.tab(t, targets.get(t.targetId)));
-        if (fresh) void session(t.targetId).catch(() => {});
-        if (t.targetId === activeId) rememberSelection();
-        broadcastState();
-        if (!activeId) activeId = t.targetId;
-        if (ready && fresh && t.openerId)
-          void activate(t.targetId, true).catch(() => {});
-      }
+      if (auditCreations.size) deferredTargetInfo.set(t.targetId, t);
+      else updateTargetInfo(t);
     }
     if (event.method === "Target.targetDestroyed") {
+      auditExclusions.delete(p.targetId);
+      deferredTargetInfo.delete(p.targetId);
+      if (p.targetId === splitTarget) {
+        splitTarget = null; splitSession = null;
+        if (!shuttingDown) void mutate(async () => {
+          await cdp("Extensions.loadUnpacked", { path: splitDirectory });
+          await splitController();
+        }).catch(() => {});
+      }
+      closingTargets.get(p.targetId)?.();
       if (!targets.has(p.targetId)) continue;
+      const wasPrivate = targets.get(p.targetId).incognito;
       vault.remove(p.targetId);
       targets.delete(p.targetId);
       browserClipboard.detachTab(p.targetId);
@@ -197,11 +278,12 @@ chrome.stdio[4].on("data", (chunk) => {
       uploads.cancelTab(p.targetId);
       for (const [sid, tab] of uploadSessions) if (tab === p.targetId) uploadSessions.delete(sid);
       sessions.delete(p.targetId);
-      broadcastState();
+      if (wasPrivate) void mutate(() => privateBrowser.prune()).catch(() => {});
       if (activeId === p.targetId) {
         activeId = [...targets.keys()][0] || "";
         if (activeId) void activate(activeId).catch(() => {});
       }
+      broadcastState();
     }
     if (event.method === "Browser.downloadWillBegin")
       downloads.begin(p.guid, p.suggestedFilename);
@@ -280,15 +362,33 @@ function scheduleSplitMeasure() {
   }, 80);
 }
 
-async function splitController() {
+async function splitController(repair = false) {
+  if (repair) {
+    const previous = splitTarget;
+    splitTarget = null; splitSession = null;
+    if (previous) await cdp("Target.closeTarget", { targetId: previous }).catch(() => {});
+  }
   if (splitSession) return splitSession;
   if (splitOpening) return splitOpening;
-  splitOpening = openSplitController().finally(() => { splitOpening = null; });
+  splitOpening = (async () => {
+    const { extensions } = await cdp("Extensions.getExtensions").catch(() => ({ extensions: [] }));
+    if (repair || extensions.some(item => item.id === extensionId && !item.enabled)) {
+      const { targetId } = await cdp("Target.createTarget", { url: extensionRepairURL, hidden: true, background: true });
+      try {
+        const { sessionId } = await cdp("Target.attachToTarget", { targetId, flatten: true });
+        await cdp("Runtime.evaluate", { expression: `new Promise(resolve => document.readyState === 'complete' ? resolve() : addEventListener('load', resolve, {once:true}))`, awaitPromise: true }, sessionId);
+        const result = await cdp("Runtime.evaluate", { expression: `chrome.management.setEnabled(${JSON.stringify(extensionId)}, true).then(() => true)`, awaitPromise: true, returnByValue: true, userGesture: true }, sessionId);
+        if (result.exceptionDetails || result.result?.value !== true) throw new Error("浏览器组件未能恢复，请重启环境");
+      } finally { await cdp("Target.closeTarget", { targetId }).catch(() => {}); }
+    }
+    return openSplitController();
+  })().finally(() => { splitOpening = null; });
   return splitOpening;
 }
 
 async function openSplitController() {
   const { targetId } = await cdp("Target.createTarget", { url: splitURL, hidden: true, background: true });
+  splitTarget = targetId;
   try {
     const { sessionId } = await cdp("Target.attachToTarget", { targetId, flatten: true });
     await cdp("Runtime.enable", {}, sessionId);
@@ -305,6 +405,7 @@ async function openSplitController() {
     for (const id of targets.keys()) refreshFavicon(id);
     return sessionId;
   } catch (error) {
+    if (splitTarget === targetId) splitTarget = null;
     await cdp("Target.closeTarget", { targetId }).catch(() => {});
     throw error;
   }
@@ -332,6 +433,12 @@ function refreshFavicon(id) {
 async function setSplit({ left, right, id }) {
   if (left && (!targets.has(left) || !targets.has(right) || left === right ||
       ![left, right].includes(id))) throw new Error("Invalid split tabs");
+  if (left && targets.get(left).browserContextId !== targets.get(right).browserContextId)
+    throw new Error("不同浏览会话不能分屏");
+  if (left && (targets.get(left).incognito || targets.get(right).incognito))
+    throw new Error("无痕标签暂不支持双网页分屏");
+  if (left && [left, right].some(id => isSettingsTab(targets.get(id))))
+    throw new Error("设置页请在单个浏览器窗格内使用");
   const sid = await splitController();
   const result = await cdp("Runtime.evaluate", { awaitPromise: true, returnByValue: true,
     expression: `setCageSplit(${JSON.stringify(left || "")}, ${JSON.stringify(right || "")})`,
@@ -354,37 +461,60 @@ async function activate(id, focus = false) {
   if (!targets.has(id)) throw new Error("Tab no longer exists");
   // Restored background tabs may have no live renderer until activated.
   // Page.enable must not block the command that wakes that renderer.
-  await cdp("Target.activateTarget", { targetId: id });
+  await visibility.activate(id);
   await session(id);
   activeId = id;
   void refreshNavigation();
   rememberSelection();
   broadcastState(focus);
-  const { windowId } = await cdp("Browser.getWindowForTarget", {
-    targetId: id,
-  });
-  await cdp("Browser.setWindowBounds", {
-    windowId,
-    bounds: { windowState: "fullscreen" },
-  }).catch(() => {});
 }
 function checkedURL(value) {
   if (value === "about:blank") return value;
-  const u = new URL(value);
-  if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
-    throw new Error("Only HTTP(S) URLs are accepted");
-  return u.href;
+  if (/^https?:\/\//i.test(value)) {
+    const url = new URL(value);
+    if (url.username || url.password) throw new Error("Only HTTP(S) URLs without credentials are accepted");
+    return url.href;
+  }
+  if (value === "chrome://extensions/" || value === "chrome://settings/content" || value === "chrome://settings/clearBrowserData") return value;
+  if (/^chrome:\/\/extensions\/\?id=[a-p]{32}$/.test(value)) return value;
+  if (value === settingsURL || value.startsWith(settingsURL + "#")) return value;
+  throw new Error("Only HTTP(S) URLs and supported browser pages are accepted");
 }
-async function newTab(url = homeURL) {
+async function newTab(url = homeURL, incognito = false) {
+  const address = checkedURL(url);
+  if (incognito) {
+    const result = await privateBrowser.open("about:blank", async tab => {
+      targets.set(tab.targetId, tab);
+      await activate(tab.targetId, true);
+    });
+    await cdp("Page.navigate", { url: address }, await session(result.id));
+    return result;
+  }
   const { targetId } = await cdp("Target.createTarget", {
-    url: checkedURL(url),
+    url: "about:blank",
     background: false,
   });
   // The response and discovery event may arrive in either order.
   if (!targets.has(targetId))
-    targets.set(targetId, { targetId, type: "page", url, title: "" });
+    targets.set(targetId, { targetId, type: "page", url: "about:blank", title: "" });
   await activate(targetId, true);
+  await cdp("Page.navigate", { url: address }, await session(targetId));
   return { id: targetId };
+}
+async function browserSettings(section = "general") {
+  if (!["general", "appearance", "privacy", "extensions", "about"].includes(section)) throw new Error("设置分类无效");
+  const url = settingsURL + "#" + section;
+  const existing = [...targets.values()].find(isSettingsTab);
+  if (existing) {
+    await cdp("Page.navigate", { url }, await session(existing.targetId));
+    existing.url = url;
+    await activate(existing.targetId, true);
+    return { id: existing.targetId, kind: "browser-settings", title: "设置", url: publicURL(existing) };
+  }
+  const result = await newTab(url);
+  const created = targets.get(result.id);
+  if (created) created.url = url;
+  return { ...result, kind: "browser-settings", title: "设置", url: "cage://settings#" + section };
 }
 async function editor(workspace = config.workspace, reload = false) {
   if (typeof workspace !== "string" || !workspace.startsWith("/")) throw new Error("Invalid workspace");
@@ -437,10 +567,11 @@ async function restartEditor(workspace) {
   throw new Error("编辑器尚未恢复，请稍后重试。");
 }
 async function tabState() {
+  await Promise.allSettled([...auditCreations]);
   const { targetInfos } = await cdp("Target.getTargets");
   for (const tab of targetInfos)
     if (isBrowserTab(tab))
-      targets.set(tab.targetId, loginBrowser.tab(tab, targets.get(tab.targetId)));
+      targets.set(tab.targetId, privateBrowser.tab(loginBrowser.tab(tab, targets.get(tab.targetId))));
   await refreshNavigation();
   return publicState();
 }
@@ -462,6 +593,7 @@ async function refreshNavigation() {
   }
 }
 function displayTitle(tab) {
+  if (isSettingsTab(tab)) return "设置";
   if (tab.login) return "账号授权";
   if (tab.url === "about:blank") return "新标签页";
   const title = tab.title;
@@ -488,11 +620,13 @@ function publicState() {
     uploads: uploads.snapshot(),
     tabs: [...targets.values()].map((t) => ({
       id: t.targetId,
+      incognito: Boolean(t.incognito),
+      login: Boolean(t.login),
       title: displayTitle(t),
-      url: t.url,
+      url: publicURL(t),
       document: documents.get(t.targetId) || "",
       favicon: favicons.get(t.targetId) || "",
-      kind: t.url.startsWith("http://127.0.0.1:18080/") ? "editor" : "web",
+      kind: isSettingsTab(t) ? "browser-settings" : t.url.startsWith("http://127.0.0.1:18080/") ? "editor" : "web",
       workspace: t.url.startsWith("http://127.0.0.1:18080/") ? new URL(t.url).searchParams.get("folder") || config.workspace : undefined,
     })),
   };
@@ -510,14 +644,18 @@ async function resizeDisplay(width, height) {
   if (
     !Number.isInteger(width) ||
     !Number.isInteger(height) ||
-    width < 320 ||
-    height < 480 ||
+    width < 160 * displayScale ||
+    height < 240 * displayScale ||
     width > 8192 ||
     height > 8192
   )
     throw new Error("Invalid display size");
   const name = `cage-${width}x${height}`;
-  if (displaySize === name) return { ok: true };
+  if (displaySize === name) {
+    // A viewer attaching at an unchanged size still restores the full rate.
+    await runFile("/usr/bin/xrandr", ["--output", "VNC-0", "--mode", name]).catch(() => {});
+    return { ok: true };
+  }
   const { stdout } = await runFile("/usr/bin/xrandr", ["--query"]);
   if (!stdout.includes(name)) {
     const rate = (((width + 32) * (height + 8) * 60) / 1000000).toFixed(3);
@@ -571,6 +709,10 @@ function pasteImage(png) {
   });
 }
 
+const tailnet = createTailnetClient();
+void tailnet.restore().catch(() => {});
+process.once("exit", () => tailnet.close());
+let phoneBrowser;
 const server = http.createServer(async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Content-Type", "application/json");
@@ -589,6 +731,11 @@ const server = http.createServer(async (req, res) => {
   try {
     if (!ready) throw new Error("Browser is starting");
     const route = new URL(req.url, "http://localhost");
+    if (req.method === "POST" && route.pathname === "/extensions-upload") {
+      if (Number(req.headers["content-length"]) > extensionUploadLimit) throw new Error("扩展 ZIP 不能超过 32 MB");
+      res.end(JSON.stringify(await mutate(() => browserExtensions.upload(req))));
+      return;
+    }
     if (req.method === "POST" && route.pathname === "/upload-file") {
       if (Number(req.headers["content-length"]) > uploadLimit) throw new Error("每个文件不能超过 2 GB");
       res.end(JSON.stringify(await uploads.receive(route.searchParams.get("id"), route.searchParams.get("name"), req)));
@@ -632,9 +779,28 @@ const server = http.createServer(async (req, res) => {
     let text = "";
     for await (const chunk of req) {
       text += chunk;
-      if (text.length > (req.url === "/paste-image" ? 28 * 1024 * 1024 : 65536)) throw new Error("Request too large");
+      if (text.length > (req.url === "/paste-image" ? 28 * 1024 * 1024 : req.url === "/paste-text" ? 12 * 1024 * 1024 + 4096 : 65536)) throw new Error("Request too large");
     }
     const input = JSON.parse(text || "{}");
+    if (req.url === "/tailnet") { res.end(JSON.stringify(await tailnet.request(input))); return; }
+    if (["/phone-desktop/open", "/phone-desktop/frame", "/phone-desktop/action", "/phone-desktop/close"].includes(req.url)) {
+      const { phoneDesktop } = await import("./browser-phone-desktop.mjs");
+      try { res.end(JSON.stringify(await phoneDesktop(req.url.split("/").pop(), input))); }
+      catch (error) { res.writeHead(error.status || 503); res.end("{}"); }
+      return;
+    }
+    if (["/phone-browser/open", "/phone-browser/action", "/phone-browser/frame", "/phone-browser/close"].includes(req.url)) {
+      // Load only for a phone operation, keeping desktop startup independent.
+      const { PhoneBrowser } = await import("./browser-phone.mjs");
+      phoneBrowser ??= new PhoneBrowser();
+      try {
+        res.end(JSON.stringify(await phoneBrowser.run(req.url.slice("/phone-browser/".length), input)));
+      } catch (error) {
+        res.writeHead([403, 409, 410, 503].includes(error.status) ? error.status : 400);
+        res.end(JSON.stringify({ error: error.message }));
+      }
+      return;
+    }
     if (req.url === "/desktop-focus") {
       broadcastState(false, true);
       res.end('{"ok":true}');
@@ -657,7 +823,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.url === "/audit") {
       if (typeof input.timezone !== "string" || input.timezone.length > 128) throw new Error("诊断时区无效");
-      res.end(JSON.stringify(await auditBrowser(cdp, auditContexts, input.network === true, input.timezone)));
+      res.end(JSON.stringify(await auditBrowser(auditCDP, auditExclusions, input.network === true, input.timezone)));
       return;
     }
     const result = await mutate(async () => {
@@ -669,6 +835,7 @@ const server = http.createServer(async (req, res) => {
         return loginBrowser.open(input.login, input.url, async tab => {
           if (!targets.has(tab.targetId)) targets.set(tab.targetId, loginBrowser.tab(tab));
           await activate(tab.targetId, true);
+          return session(tab.targetId);
         });
       }
       if (req.url === "/login-finish") {
@@ -689,9 +856,39 @@ const server = http.createServer(async (req, res) => {
         return { ok: true };
       }
       if (req.url === "/split") return setSplit(input);
+      if (req.url === "/settings") return browserSettings(input.mode || "general");
+      if (req.url === "/info") {
+        const { product, protocolVersion } = await cdp("Browser.getVersion");
+        return { product, protocolVersion };
+      }
+      if (req.url === "/extensions") {
+        const result = await browserExtensions.request(input);
+        if (input.mode === "options" && result.url) {
+          if (!result.url.startsWith(`chrome-extension://${input.id}/`)) throw new Error("扩展设置地址无效");
+          const { targetId } = await cdp("Target.createTarget", { url: result.url });
+          if (!targets.has(targetId)) targets.set(targetId, { targetId, type: "page", url: result.url });
+          await activate(targetId, true);
+          return { id: targetId, url: result.url, kind: "web", title: "扩展选项" };
+        }
+        return result;
+      }
+      if (req.url === "/internal-page") {
+        const destinations = { extensions: "chrome://extensions/", permissions: "chrome://settings/content", clear: "chrome://settings/clearBrowserData" };
+        let url = destinations[input.mode];
+        if (input.mode === "extensions" && input.id) {
+          if (!/^[a-p]{32}$/.test(input.id)) throw new Error("扩展标识无效");
+          url += "?id=" + input.id;
+        }
+        if (!url) throw new Error("内部页面无效");
+        return { ...await newTab(url), url, kind: "web", title: "浏览器设置" };
+      }
+      if (req.url === "/visibility") {
+        await visibility.set(input.visible);
+        return { ok: true };
+      }
       if (req.url === "/resize")
         return resizeDisplay(input.width, input.height);
-      if (req.url === "/new") return newTab(input.url || undefined);
+      if (req.url === "/new") return newTab(input.url || undefined, input.incognito === true);
       if (req.url === "/editor") return editor(input.workspace || config.workspace);
       if (req.url === "/editor-restart") return restartEditor(input.workspace);
       if (req.url === "/ime") {
@@ -703,6 +900,7 @@ const server = http.createServer(async (req, res) => {
       const id = input.id || activeId;
       if (!targets.has(id)) throw new Error("Tab no longer exists");
       switch (req.url) {
+        case "/cookies": return browserCookies(cdp, session, { ...targets.get(id), url: publicURL(targets.get(id)) }, input);
         case "/copy-context": {
           if (!/^[a-f0-9]{32}$/.test(input.context || "") || id !== activeId)
             throw new Error("Copy target changed");
@@ -717,6 +915,14 @@ const server = http.createServer(async (req, res) => {
           if (input.id !== activeId) throw new Error("Image target changed");
           await pasteImage(input.png);
           break;
+        case "/paste-text": {
+          if (input.id !== activeId || typeof input.text !== "string" || Buffer.byteLength(input.text) > 2 * 1024 * 1024)
+            throw new Error("Input target or text is invalid");
+          const field = await nativeInput({ target: "browser", mode: "status" });
+          if (!field.available || field.context !== input.context || input.id !== activeId) throw new Error("Input target changed");
+          await cdp("Input.insertText", { text: input.text }, await session(id));
+          break;
+        }
         case "/insert-text":
           if (input.id !== activeId || typeof input.text !== "string" ||
               !input.text || Buffer.byteLength(input.text, "utf8") > 8192)
@@ -726,10 +932,22 @@ const server = http.createServer(async (req, res) => {
         case "/activate":
           await activate(id);
           break;
-        case "/close":
-          if (targets.size === 1) await newTab();
-          await cdp("Target.closeTarget", { targetId: id });
+        case "/close": {
+          const wasPrivate = targets.get(id).incognito;
+          let timer;
+          const closed = new Promise((resolve, reject) => {
+            closingTargets.set(id, resolve);
+            timer = setTimeout(() => reject(new Error("标签尚未关闭，请重试")), 4500);
+          });
+          // Keep consecutive close/new commands ordered after target destruction.
+          closed.catch(() => {});
+          try {
+            await cdp("Target.closeTarget", { targetId: id });
+            await closed;
+            if (wasPrivate) await privateBrowser.prune();
+          } finally { clearTimeout(timer); closingTargets.delete(id); }
           break;
+        }
         case "/navigate":
           await cdp(
             "Page.navigate",
@@ -766,7 +984,9 @@ const server = http.createServer(async (req, res) => {
 });
 server.listen(18500, "127.0.0.1");
 (async () => {
-  await cdp("Browser.getVersion");
+  // A cold guest can spend several seconds initializing the sandbox and fonts.
+  // Keep ordinary commands bounded separately from this initial handshake.
+  await cdp("Browser.getVersion", {}, undefined, 30000);
   await cdp("Target.setDiscoverTargets", { discover: true });
   const { targetInfos } = await cdp("Target.getTargets");
   for (const t of targetInfos)
@@ -783,6 +1003,9 @@ server.listen(18500, "127.0.0.1");
         [...targets.keys()][0],
     );
   await setSplit({}).catch(() => {});
+  await browserExtensions.restore();
+  if (freshProfile && activeId)
+    await cdp("Page.navigate", { url: homeURL }, await session(activeId));
   ready = true;
 })().catch(error => {
   console.error("Browser startup failed:", error.message);
@@ -791,6 +1014,7 @@ server.listen(18500, "127.0.0.1");
 process.on("SIGTERM", () => {
   shuttingDown = true;
   server.close();
+  void phoneBrowser?.dispose();
   cdp("Browser.close").catch(() => {});
   setTimeout(() => process.exit(0), 2000).unref();
 });

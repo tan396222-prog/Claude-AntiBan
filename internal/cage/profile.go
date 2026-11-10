@@ -12,8 +12,26 @@ import (
 
 type runningProfile struct {
 	PID         int    `json:"pid"`
+	Started     string `json:"started,omitempty"`
 	Fingerprint string `json:"fingerprint"`
 	JobID       string `json:"job_id,omitempty"`
+}
+
+// ProcessStartMatches reports false only when pid now belongs to a process
+// started at a different time than the record. After a reboot or crash the
+// recorded PID can be reused by an unrelated process. Records from older
+// versions carry no start time and an unreadable start time cannot prove
+// reuse; both keep the previous PID-only behavior.
+func ProcessStartMatches(pid int, started string) bool {
+	if started == "" {
+		return true
+	}
+	current := processStartToken(pid)
+	return current == "" || current == started
+}
+
+func (r runningProfile) alive() bool {
+	return r.PID > 0 && profileProcessAlive(r.PID) && ProcessStartMatches(r.PID, r.Started)
 }
 
 func (c Config) Fingerprint() string {
@@ -34,7 +52,8 @@ func (c Config) RecordRunning(state, name string) error {
 // RecordRunningAt records the network owner's identity in the runtime's real
 // instance directory; container environments do not create Lima metadata.
 func (c Config) RecordRunningAt(dir string) error {
-	b, _ := json.Marshal(runningProfile{PID: os.Getpid(), Fingerprint: c.Fingerprint(), JobID: os.Getenv(JobEnv)})
+	pid := os.Getpid()
+	b, _ := json.Marshal(runningProfile{PID: pid, Started: processStartToken(pid), Fingerprint: c.Fingerprint(), JobID: os.Getenv(JobEnv)})
 	f, err := os.CreateTemp(dir, ".running-*")
 	if err != nil {
 		return err
@@ -71,11 +90,7 @@ func (c Config) CheckRunning(state string) error {
 		if json.Unmarshal(b, &r) != nil {
 			return errors.New("invalid running cage profile record")
 		}
-		if r.PID < 1 {
-			continue
-		}
-		alive := profileProcessAlive(r.PID)
-		if alive && r.Fingerprint != c.Fingerprint() {
+		if r.alive() && r.Fingerprint != c.Fingerprint() {
 			return fmt.Errorf("cage configuration changed while a VM is running; run cage stop before restarting")
 		}
 	}

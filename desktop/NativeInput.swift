@@ -85,7 +85,8 @@ final class CageNativeInput: NSView, NSTextInputClient {
     }
 
     override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command) {
+        let physical = MacKeyboard.codes[event.keyCode] ?? ""
+        if event.modifierFlags.contains(.command) || (!hasMarkedText() && physical.hasPrefix("F")) {
             sendKey(event, down: true)
             return
         }
@@ -96,25 +97,13 @@ final class CageNativeInput: NSView, NSTextInputClient {
     override func keyUp(with event: NSEvent) { sendKey(event, down: false) }
     override func flagsChanged(with event: NSEvent) {
         let flags: [UInt16: NSEvent.ModifierFlags] = [54: .command, 55: .command,
-            56: .shift, 60: .shift, 58: .option, 61: .option, 59: .control, 62: .control]
+            56: .shift, 60: .shift, 57: .capsLock, 58: .option, 61: .option, 59: .control, 62: .control]
         if let flag = flags[event.keyCode] { sendKey(event, down: event.modifierFlags.contains(flag)) }
     }
 
     private func sendKey(_ event: NSEvent, down: Bool, text: String? = nil) {
-        let special: [UInt16: String] = [36:"Enter",48:"Tab",49:" ",51:"Backspace",
-            53:"Escape",54:"Meta",55:"Meta",56:"Shift",57:"CapsLock",58:"Alt",59:"Control",
-            60:"Shift",61:"Alt",62:"Control",115:"Home",116:"PageUp",117:"Delete",
-            119:"End",121:"PageDown",123:"ArrowLeft",124:"ArrowRight",125:"ArrowDown",126:"ArrowUp"]
-        let letters: [UInt16: String] = [0:"A",1:"S",2:"D",3:"F",4:"H",5:"G",6:"Z",7:"X",8:"C",9:"V",11:"B",12:"Q",13:"W",14:"E",15:"R",16:"Y",17:"T",31:"O",32:"U",34:"I",35:"P",37:"L",38:"J",40:"K",45:"N",46:"M"]
-        let codes: [UInt16: String] = [36:"Enter",48:"Tab",49:"Space",51:"Backspace",53:"Escape",
-            54:"MetaRight",55:"MetaLeft",56:"ShiftLeft",57:"CapsLock",58:"AltLeft",59:"ControlLeft",
-            60:"ShiftRight",61:"AltRight",62:"ControlRight",115:"Home",116:"PageUp",117:"Delete",
-            119:"End",121:"PageDown",123:"ArrowLeft",124:"ArrowRight",125:"ArrowDown",126:"ArrowUp",
-            18:"Digit1",19:"Digit2",20:"Digit3",21:"Digit4",22:"Digit6",23:"Digit5",25:"Digit9",26:"Digit7",28:"Digit8",29:"Digit0",
-            24:"Equal",27:"Minus",30:"BracketRight",33:"BracketLeft",39:"Quote",41:"Semicolon",42:"Backslash",43:"Comma",44:"Slash",47:"Period",50:"Backquote"]
-        let key = text ?? special[event.keyCode] ?? event.charactersIgnoringModifiers ?? "Unidentified"
-        let code = letters[event.keyCode].map { "Key" + $0 } ?? codes[event.keyCode] ?? "Unidentified"
-        emit(down ? "keydown" : "keyup", ["key": key, "code": code,
+        let identity = MacKeyboard.identity(event.keyCode, characters: text ?? event.charactersIgnoringModifiers ?? "")
+        emit(down ? "keydown" : "keyup", ["key": text ?? identity.key, "code": identity.code,
             "metaKey":event.modifierFlags.contains(.command),"ctrlKey":event.modifierFlags.contains(.control),
             "altKey":event.modifierFlags.contains(.option),"shiftKey":event.modifierFlags.contains(.shift),"repeat":event.isARepeat,
             "modifierCapsLock":event.modifierFlags.contains(.capsLock),"textKey":text != nil])

@@ -259,7 +259,7 @@ func createVM(ctx context.Context, inst *limatype.Instance) (*vz.VirtualMachine,
 // createVMForMacInstaller is similar to createVM but only used for VZMacOSInstaller.
 // - Only the primary disk is attached.
 // - No network.
-func createVMForMacInstaller(_ context.Context, inst *limatype.Instance) (*vz.VirtualMachine, error) {
+func createVMForMacInstaller(_ context.Context, inst *limatype.Instance, disk string) (*vz.VirtualMachine, error) {
 	vmConfig, err := createInitialConfig(inst)
 	if err != nil {
 		return nil, err
@@ -270,7 +270,6 @@ func createVMForMacInstaller(_ context.Context, inst *limatype.Instance) (*vz.Vi
 	}
 
 	// Only attach the primary disk here. cidata.iso is not existent at this point.
-	disk := filepath.Join(inst.Dir, filenames.Disk)
 	diffDiskAttachment, err := vz.NewDiskImageStorageDeviceAttachmentWithCacheAndSync(disk, false, diskImageCachingMode, vz.DiskImageSynchronizationModeFsync)
 	if err != nil {
 		return nil, err
@@ -629,11 +628,17 @@ func attachDisks(ctx context.Context, inst *limatype.Instance, vmConfig *vz.Virt
 
 func attachDisplay(inst *limatype.Instance, vmConfig *vz.VirtualMachineConfiguration) error {
 	switch *inst.Config.Video.Display {
-	case "vz", "default":
+	case "vz", "default", "offscreen":
 		var graphicsDeviceConfiguration vz.GraphicsDeviceConfiguration
 		if *inst.Config.OS == limatype.DARWIN {
 			var err error
-			graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(1920, 1200, 80)
+			if *inst.Config.Video.Display == "offscreen" {
+				// macOS uses the display's physical density to select Retina backing.
+				// Keep a 1920 x 1200 point workspace for the embedded application.
+				graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(3840, 2400, 220)
+			} else {
+				graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(1920, 1200, 80)
+			}
 			if err != nil {
 				return err
 			}

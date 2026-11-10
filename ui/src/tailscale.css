@@ -1,0 +1,71 @@
+.tailscale-panel { display: flex; flex-direction: column; gap: 20px; }
+.tailscale-overview { padding: 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--chrome); }
+.tailscale-state { display: flex; align-items: center; gap: 12px; }
+.tailscale-state > div:nth-child(2) { flex: 1; min-width: 0; }
+.tailscale-network-icon { display: flex; padding: 10px; background: var(--hover); border-radius: 10px; }
+.connected .tailscale-network-icon { color: var(--accent); }
+.tailscale-state strong { display: block; font-size: 17px; }
+.tailscale-state span, .tailscale-peer-info span, .tailscale-address { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; overflow-wrap: anywhere; }
+.tailscale-overview > .field-help { margin: 14px 0 0; }
+.tailscale-account { color: var(--muted); font-size: 12px; margin: 8px 0 0; overflow-wrap: anywhere; }
+.tailscale-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.tailscale-section { display: flex; flex-direction: column; gap: 12px; min-width: 0; border-top: 1px solid var(--border); padding-top: 18px; }
+.tailscale-section h3 { margin: 0; font-size: 14px; }
+.tailscale-section h3 > span { margin-left: 8px; color: var(--muted); font-weight: 400; }
+.tailscale-section .field-help { margin: 0; }
+.tailscale-section-heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+.tailscale-self, .tailscale-peer-row { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.tailscale-self > div, .tailscale-peer-info { flex: 1; min-width: 0; }
+.tailscale-self strong, .tailscale-peer-info strong { font-size: 13px; overflow-wrap: anywhere; }
+.tailscale-self { padding: 0 2px; }
+.tailscale-badge { display: inline-block; font-size: 10px; font-weight: 400; padding: 2px 6px; margin-left: 5px; border-radius: 4px; color: var(--muted); border: 1px solid var(--border); }
+.tailscale-search { display: flex; gap: 8px; align-items: center; color: var(--muted); border: 1px solid var(--border); border-radius: 7px; padding: 0 10px; }
+.tailscale-search input { width: 100%; border: 0; background: transparent; padding: 10px 0; font: inherit; color: var(--ink); outline-offset: 2px; min-width: 0; }
+.tailscale-empty { display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; color: var(--muted); padding: 28px 20px; background: var(--chrome); border-radius: 8px; }
+.tailscale-empty strong { font-size: 13px; font-weight: 500; color: var(--ink); }
+.tailscale-empty p { margin: 0; max-width: 390px; font-size: 12px; line-height: 1.7; }
+.tailscale-peers { display: flex; flex-direction: column; }
+.tailscale-peer { border-bottom: 1px solid var(--border); padding: 13px 0; }
+.tailscale-peer:last-child { border-bottom: 0; padding-bottom: 0; }
+.tailscale-peer-row > svg, .tailscale-self > svg { flex-shrink: 0; color: var(--muted); }
+.tailscale-peer-row button { flex-shrink: 0; }
+.tailscale-presence { display: flex; align-items: center; gap: 5px; white-space: nowrap; color: var(--muted); font-size: 11px; }
+.tailscale-presence i { display: block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+.tailscale-presence.online i { background: #528267; }
+.tailscale-device-detail { display: flex; flex-direction: column; gap: 10px; padding: 16px; margin-top: 12px; background: var(--chrome); border: 1px solid var(--border); border-radius: 8px; }
+.tailscale-dns { overflow-wrap: anywhere; }
+.tailscale-connect-form { display: flex; gap: 8px; }
+.tailscale-connect-form input { min-width: 0; flex: 1; border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; background: transparent; color: var(--ink); font: inherit; font-size: 12px; }
+.tailscale-disclosure { display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 0; background: transparent; padding: 0; width: 100%; color: inherit; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; text-align: left; }
+.tailscale-disclosure > span, .tailscale-detail .field-label { display: flex; align-items: center; gap: 8px; }
+.tailscale-disclosure > svg, .tailscale-peer-row button > svg { transition: transform 160ms ease; }
+.tailscale-disclosure[aria-expanded="true"] > svg, .tailscale-peer-row button[aria-expanded="true"] > svg { transform: rotate(180deg); }
+.tailscale-detail { display: flex; flex-direction: column; gap: 10px; }
+.tailscale-detail > button { align-self: flex-start; }
+.tailscale-detail textarea { width: 100%; resize: vertical; min-height: 72px; font-family: var(--font-mono, monospace); font-size: 12px; border: 1px solid var(--border); border-radius: 7px; background: var(--chrome); color: inherit; padding: 9px 10px; }
+.tailscale-command, .tailscale-key { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.tailscale-command { border: 1px solid var(--border); border-radius: 7px; padding: 7px 10px; }
+.tailscale-command code { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.tailscale-keys { display: flex; flex-direction: column; gap: 10px; }
+.tailscale-key code { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.tailscale-panel > .tailscale-footer { margin: 0; font-size: 11px; line-height: 1.7; }
+.tailscale-notice { display: flex; gap: 6px; align-items: center; font-size: 12px; margin: 0; color: var(--accent); }
+.tailscale-health { border-left: 2px solid var(--accent); padding: 0 12px; font-size: 12px; }
+.tailscale-health p { margin: 6px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .tailscale-panel { gap: 16px; }
+  .tailscale-overview { padding: 14px; }
+  .tailscale-peer-row { flex-wrap: wrap; gap: 9px; }
+  .tailscale-peer-info { flex-basis: calc(100% - 100px); }
+  .tailscale-presence { margin-left: 32px; }
+  .tailscale-connect-form { flex-direction: column; }
+  .tailscale-self { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .tailscale-disclosure > svg, .tailscale-peer-row button > svg { transition: none; }
+}
+.tailscale-forward { display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 7px; padding: 9px 10px; }
+.tailscale-forward > span { flex: 1; min-width: 0; }
+.tailscale-forward strong { display: block; font-size: 11px; margin-bottom: 4px; }
+.tailscale-forward code { font-size: 12px; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .tailscale-forward { flex-wrap: wrap; } }

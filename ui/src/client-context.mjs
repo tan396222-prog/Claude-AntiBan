@@ -1,4 +1,4 @@
-let current = Object.freeze({ mode: "local", connection_id: "local" });
+let current = Object.freeze({ mode: "none", connection_id: "" });
 
 export function setClientContext(value) {
   current = Object.freeze({ ...value });
@@ -16,9 +16,11 @@ export function assertConnection(connectionID) {
 }
 
 export function connectionHeaders(path, context = current) {
-  if (path === "/session" || path.startsWith("/client/")) return {};
+  if (path === "/session" || (path.startsWith("/client/") && !isProjectSharesPath(path))) return {};
   return { "X-Cage-Connection": context.connection_id || "disconnected" };
 }
+
+export const isProjectSharesPath = (path) => path === "/client/project-shares" || path.startsWith("/client/project-shares/");
 
 export function runtimeURL(path, context = current) {
   const url = new URL("/api" + path, globalThis.location?.origin || "http://localhost");

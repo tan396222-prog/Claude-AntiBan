@@ -80,6 +80,11 @@ func stopWindowsCore(profile string) error {
 	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) {
 		return os.Remove(path)
 	}
+	if errors.Is(err, windows.ERROR_ACCESS_DENIED) && !recordedCoreRunning(record) {
+		// The core runs as the current user, so a PID that cannot be
+		// terminated now belongs to another account's process.
+		return removeStaleCore(profile, path)
+	}
 	if err != nil {
 		return err
 	}
@@ -88,8 +93,10 @@ func stopWindowsCore(profile string) error {
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(filepath.Clean(image), filepath.Clean(record.Executable)) || created != record.Created {
-		return errors.New("代理进程身份已变化，未停止其他进程")
+	if !sameCore(record, image, created) {
+		// The recorded core exited and its PID was reused, typically after a
+		// reboot. Forget the stale record and leave the other process alone.
+		return removeStaleCore(profile, path)
 	}
 	var code uint32
 	if err := windows.GetExitCodeProcess(handle, &code); err != nil {
@@ -109,6 +116,28 @@ func stopWindowsCore(profile string) error {
 	}
 	_ = os.Remove(Socket(profile))
 	return os.Remove(path)
+}
+
+func sameCore(record windowsCoreRecord, image string, created int64) bool {
+	return strings.EqualFold(filepath.Clean(image), filepath.Clean(record.Executable)) && created == record.Created
+}
+
+func recordedCoreRunning(record windowsCoreRecord) bool {
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, record.PID)
+	if err != nil {
+		return false
+	}
+	defer windows.CloseHandle(handle)
+	image, created, err := identifyCore(handle)
+	return err == nil && sameCore(record, image, created)
+}
+
+func removeStaleCore(profile, path string) error {
+	_ = os.Remove(Socket(profile))
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 func startWindowsCore(ctx context.Context, profile string, s Store) error {
@@ -155,7 +184,7 @@ func startWindowsCore(ctx context.Context, profile string, s Store) error {
 
 	cmd := exec.Command(core, "-d", Dir(profile), "-f", path)
 	cmd.Env, cmd.Stdout, cmd.Stderr = coreEnvironment(Dir(profile)), log, log
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
 	if err := cmd.Start(); err != nil {
 		_ = log.Close()
 		return err

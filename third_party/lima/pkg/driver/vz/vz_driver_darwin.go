@@ -18,15 +18,19 @@ import (
 	"time"
 
 	"github.com/Code-Hex/vz/v3"
+	continuityfs "github.com/containerd/continuity/fs"
 	"github.com/coreos/go-semver/semver"
 	"github.com/docker/go-units"
 	"github.com/lima-vm/go-qcow2reader/image"
 	"github.com/lima-vm/go-qcow2reader/image/asif"
 	"github.com/lima-vm/go-qcow2reader/image/raw"
+	"github.com/opencontainers/go-digest"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 
 	"github.com/lima-vm/lima/v2/pkg/driver"
 	"github.com/lima-vm/lima/v2/pkg/driverutil"
+	"github.com/lima-vm/lima/v2/pkg/fileutils"
 	"github.com/lima-vm/lima/v2/pkg/guestpatch/macos"
 	"github.com/lima-vm/lima/v2/pkg/hostagent/events"
 	"github.com/lima-vm/lima/v2/pkg/imgutil/nativeimgutil"
@@ -34,6 +38,7 @@ import (
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
 	"github.com/lima-vm/lima/v2/pkg/limayaml"
+	"github.com/lima-vm/lima/v2/pkg/lockutil"
 	"github.com/lima-vm/lima/v2/pkg/osutil"
 	"github.com/lima-vm/lima/v2/pkg/reflectutil"
 	"github.com/lima-vm/lima/v2/pkg/sshutil"
@@ -339,9 +344,9 @@ func validateConfig(cfg *limatype.LimaYAML) error {
 	}
 
 	switch videoDisplay := *cfg.Video.Display; videoDisplay {
-	case "vz", "default", "none":
+	case "vz", "default", "none", "offscreen":
 	default:
-		logrus.Warnf("field `video.display` must be `vz`, `default`, or `none` for VZ driver , got %#q", videoDisplay)
+		logrus.Warnf("field `video.display` must be `vz`, `default`, `none`, or `offscreen` for VZ driver, got %#q", videoDisplay)
 	}
 	var vzOpts limatype.VZOpts
 	if err := limayaml.Convert(cfg.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
@@ -370,39 +375,117 @@ func (l *LimaVzDriver) Create(_ context.Context) error {
 }
 
 func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
-	if *l.Instance.Config.OS == limatype.DARWIN {
-		disk := filepath.Join(l.Instance.Dir, filenames.Disk)
-		if !osutil.FileExists(disk) {
-			if err := l.createDiskMacOSGuest(ctx); err != nil {
-				return err
-			}
-		}
-
-		patchedMarker := disk + ".patched" // empty file
-		if !osutil.FileExists(patchedMarker) {
-			logrus.Infof("Patching macOS disk %#q", disk)
-			if err := macos.Patch(ctx, disk); err != nil {
-				return err
-			}
-			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
-				return err
-			}
-		}
+	if *l.Instance.Config.OS != limatype.DARWIN {
+		return driverutil.EnsureDisk(ctx, l.Instance.Dir, *l.Instance.Config.Disk, l.diskImageFormat)
 	}
-	return driverutil.EnsureDisk(ctx, l.Instance.Dir, *l.Instance.Config.Disk, l.diskImageFormat)
+	return lockutil.WithDirLock(l.Instance.Dir, func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		disk := filepath.Join(l.Instance.Dir, filenames.Disk)
+		if err := restoreMacOSDisk(disk, func(staging string) error { return l.createDiskMacOSGuest(ctx, staging) }); err != nil {
+			return err
+		}
+		patchedMarker := disk + ".patched"
+		if osutil.FileExists(patchedMarker) {
+			return nil
+		}
+		logrus.Infof("Patching macOS disk %#q", disk)
+		if err := macos.Patch(ctx, disk); err != nil {
+			return fmt.Errorf("preparing existing macOS disk %q: %w", disk, err)
+		}
+		return os.WriteFile(patchedMarker, nil, 0o644)
+	})
 }
 
-// createDiskMacOSGuest creates `disk` and installs macOS from `image` on it.
-// The function must not be called if `disk` already exists.
-//
-// The function creates the following files:
-// - `image.ipsw`: hardlink to `image` (".ipsw" suffix is required by VZMacOSInstaller)
-// - `disk`: raw or ASIF disk (ASIF requires macOS 26+)
-//
-// After successful installation, `image.ipsw` and `image` are removed.
-func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
-	disk := filepath.Join(l.Instance.Dir, filenames.Disk)
+// restoreMacOSDisk is called with the instance lock held. Existing guest disks
+// are never replaced. A process that exits during restore leaves only staging.
+func restoreMacOSDisk(disk string, install func(string) error) error {
+	if _, err := os.Lstat(disk); err == nil || !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	staging := disk + ".installing"
+	// diskutil can append .asif when creating a blank disk. A killed process
+	// can leave either name behind. A fresh install also needs a fresh patch.
+	for _, path := range []string{staging, staging + ".asif", disk + ".patched"} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	defer os.Remove(staging)
+	defer os.Remove(staging + ".asif")
+	if err := install(staging); err != nil {
+		return err
+	}
+	if err := unix.RenamexNp(staging, disk, unix.RENAME_EXCL); err != nil {
+		return err
+	}
+	// Remove only the instance's installation media after the disk is ready.
+	for _, filename := range []string{filenames.ImageIPSW, filenames.Image} {
+		path := filepath.Join(filepath.Dir(disk), filename)
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			logrus.WithError(err).Warnf("Failed to remove %#q", path)
+		}
+	}
+	return nil
+}
 
+// verifiedMacOSIPSW runs under the instance's restore lock. It checks the
+// actual private installer input, including media left after an interruption.
+func verifiedMacOSIPSW(ctx context.Context, inst *limatype.Instance) (string, error) {
+	if err := ensureIPSW(inst.Dir); err != nil {
+		return "", err
+	}
+	ipsw := filepath.Join(inst.Dir, filenames.ImageIPSW)
+	images := inst.Config.Images
+	if len(images) != 1 || !filepath.IsAbs(images[0].Location) || images[0].Digest == "" {
+		return ipsw, nil
+	}
+	expected := images[0].Digest
+	if err := expected.Validate(); err != nil {
+		return "", err
+	}
+	if expected.Algorithm() != digest.SHA256 {
+		return ipsw, nil
+	}
+	actual, err := fileutils.RestoreImageDigest(ctx, ipsw, nil)
+	if err != nil {
+		return "", err
+	}
+	if actual == expected {
+		return ipsw, nil
+	}
+	// Recover a stale private copy if the selected source is available again.
+	// Copy-on-write on APFS freezes the bytes at clone time. Only a verified
+	// copy can replace the private input; the selected file stays untouched.
+	tmpDir, err := os.MkdirTemp(inst.Dir, ".ipsw-repair-")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmpDir)
+	staging := filepath.Join(tmpDir, "restore.ipsw")
+	defer os.Remove(staging)
+	if err := continuityfs.CopyFile(staging, images[0].Location); err != nil {
+		return "", fmt.Errorf("private IPSW digest mismatch; cannot recover the selected source: %w", err)
+	}
+	actual, err = fileutils.RestoreImageDigest(ctx, staging, nil)
+	if err != nil {
+		return "", err
+	}
+	if actual != expected {
+		return "", fmt.Errorf("macOS restore image digest mismatch: expected %s, got %s", expected, actual)
+	}
+	if err := os.Rename(staging, ipsw); err != nil {
+		return "", err
+	}
+	return ipsw, nil
+}
+
+func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context, disk string) error {
+	ipsw, err := verifiedMacOSIPSW(ctx, l.Instance)
+	if err != nil {
+		return err
+	}
 	diskSize, err := units.RAMInBytes(*l.Instance.Config.Disk)
 	if err != nil {
 		return fmt.Errorf("invalid disk size %#q: %w", *l.Instance.Config.Disk, err)
@@ -423,12 +506,7 @@ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
 		return fmt.Errorf("unsupported disk format for macOS guest: %s", l.diskImageFormat)
 	}
 
-	if err = ensureIPSW(l.Instance.Dir); err != nil {
-		return err
-	}
-	ipsw := filepath.Join(l.Instance.Dir, filenames.ImageIPSW)
-
-	vm, err := createVMForMacInstaller(ctx, l.Instance)
+	vm, err := createVMForMacInstaller(ctx, l.Instance, disk)
 	if err != nil {
 		return err
 	}
@@ -438,16 +516,6 @@ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
 	// or can we safely reuse the installed disk image?
 	if err := installMacOS(ctx, vm, ipsw); err != nil {
 		return fmt.Errorf("failed to install macOS: %w", err)
-	}
-
-	filesToClean := []string{
-		ipsw,
-		filepath.Join(l.Instance.Dir, filenames.Image),
-	}
-	for _, file := range filesToClean {
-		if err := os.RemoveAll(file); err != nil {
-			logrus.WithError(err).Warnf("Failed to remove %#q", file)
-		}
 	}
 
 	return nil
@@ -468,8 +536,15 @@ func (l *LimaVzDriver) Start(ctx context.Context) (chan error, error) {
 	return errCh, nil
 }
 
+// OffscreenView lets an embedding application service a user-authorized login
+// view without opening Lima's VM window. The application must bind the exact instance.
+var OffscreenView func(ctx context.Context, machine *vz.VirtualMachine, instanceDir string) error
+var OwnsOffscreenView func(instanceDir string) bool
+
 func (l *LimaVzDriver) canRunGUI() bool {
 	switch *l.Instance.Config.Video.Display {
+	case "offscreen":
+		return *l.Instance.Config.OS == limatype.DARWIN && OffscreenView != nil && OwnsOffscreenView != nil && OwnsOffscreenView(l.Instance.Dir)
 	case "vz", "default":
 		return true
 	default:
@@ -477,8 +552,11 @@ func (l *LimaVzDriver) canRunGUI() bool {
 	}
 }
 
-func (l *LimaVzDriver) RunGUI(_ context.Context) error {
+func (l *LimaVzDriver) RunGUI(ctx context.Context) error {
 	if l.canRunGUI() {
+		if *l.Instance.Config.Video.Display == "offscreen" {
+			return OffscreenView(ctx, l.machine.VirtualMachine, l.Instance.Dir)
+		}
 		title := fmt.Sprintf("Lima: %s", l.Instance.Name)
 		return l.machine.StartGraphicApplication(1920, 1200, vz.WithWindowTitle(title))
 	}
@@ -506,7 +584,6 @@ const gracefulStopTimeout = 30 * time.Second
 
 func (l *LimaVzDriver) Stop(ctx context.Context) error {
 	logrus.Info("Shutting down VZ")
-	defer l.removePIDFile()
 
 	requested := false
 	if l.machine.CanRequestStop() {
@@ -531,7 +608,12 @@ func (l *LimaVzDriver) Stop(ctx context.Context) error {
 
 	// The VM is never stopped forcibly with l.machine.Stop(): that does not give the guest
 	// a chance to stop cleanly, and may corrupt the disk.
-	return l.waitForStopped(gracefulStopTimeout)
+	if err := l.waitForStopped(gracefulStopTimeout); err != nil {
+		// Retain the owner record while the VM may still be running.
+		return err
+	}
+	l.removePIDFile()
+	return nil
 }
 
 func (l *LimaVzDriver) waitForStopped(timeout time.Duration) error {

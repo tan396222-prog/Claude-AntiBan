@@ -23,6 +23,26 @@ func TestValidateEmpty(t *testing.T) {
 	assert.Error(t, err, "field `images` must be set")
 }
 
+func TestOffscreenDisplayRequiresMacOSAndVZ(t *testing.T) {
+	for _, tc := range []struct{ os, driver string }{
+		{limatype.DARWIN, limatype.VZ},
+		{limatype.LINUX, limatype.VZ},
+		{limatype.DARWIN, limatype.QEMU},
+	} {
+		t.Run(tc.os+"-"+tc.driver, func(t *testing.T) {
+			body := fmt.Sprintf("os: %s\nvmType: %s\nvideo: {display: offscreen}\nimages: [{location: /}]\n", tc.os, tc.driver)
+			y, err := Load(t.Context(), []byte(body), "lima.yaml")
+			assert.NilError(t, err)
+			err = Validate(y, false)
+			if tc.os == limatype.DARWIN && tc.driver == limatype.VZ {
+				assert.NilError(t, err)
+			} else {
+				assert.ErrorContains(t, err, "offscreen requires a macOS guest")
+			}
+		})
+	}
+}
+
 func TestValidateMinimumLimaVersion(t *testing.T) {
 	images := `images: [{"location": "/"}]`
 

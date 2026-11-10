@@ -28,6 +28,7 @@ import (
 type rootedHandlers struct {
 	rootPath      string // slash-separated, cleaned
 	root          *os.Root
+	cloud         bool // stricter checks for the remote desktop project transport
 	readonly      bool
 	readonlyNames []string
 	foldedNames   []string // readonlyNames as FoldName gives them
@@ -43,6 +44,10 @@ type rootedHandlers struct {
 const maxHandles = 4096
 
 func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, readonlyNames []string) (*sftp.RequestServer, *rootedHandlers, error) {
+	return newRootedServerAt(rwc, localPath, slashPath(localPath), readonly, readonlyNames)
+}
+
+func newRootedServerAt(rwc io.ReadWriteCloser, localPath, exportedPath string, readonly bool, readonlyNames []string) (*sftp.RequestServer, *rootedHandlers, error) {
 	root, err := os.OpenRoot(localPath)
 	if err != nil {
 		return nil, nil, err
@@ -53,7 +58,7 @@ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, re
 		return nil, nil, err
 	}
 	h := &rootedHandlers{
-		rootPath:      slashPath(localPath),
+		rootPath:      exportedPath,
 		root:          root,
 		readonly:      readonly,
 		readonlyNames: readonlyNames,
@@ -110,7 +115,7 @@ func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if h.isReadonlyName(r) || !writableName(r) {
+	if h.isReadonlyName(r) || !writableName(r) || (h.cloud && r == ".") {
 		return "", errDenied
 	}
 	if lexicalGuard {
@@ -135,7 +140,7 @@ func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
 var Guard func(root, rel string, entry bool) bool
 
 func (h *rootedHandlers) guard(rel string, entry bool) error {
-	if Guard != nil && !Guard(h.guardRoot, rel, entry) {
+	if !h.cloud && Guard != nil && !Guard(h.guardRoot, rel, entry) {
 		return errDenied
 	}
 	return nil
@@ -208,7 +213,7 @@ func (f writableFile) WriteAt(b []byte, off int64) (int, error) {
 }
 
 func (h *rootedHandlers) openWritable(r *sftp.Request) (writableFile, error) {
-	if r.Pflags().Creat {
+	if !h.cloud && r.Pflags().Creat {
 		h.creating(r.Filepath)
 	}
 	f, err := h.openFile(r)
@@ -412,11 +417,12 @@ func (h *rootedHandlers) RealPath(p string) (string, error) {
 // by the path f was opened with, which the client could have made a symlink to a folder
 // outside the root), so the entries are those of f whatever it was renamed to.
 type dirLister struct {
-	mu   sync.Mutex
-	f    *os.File
-	buf  []os.FileInfo // read, not listed yet
-	next int64         // offset of buf[0]
-	eof  bool
+	cloud bool
+	mu    sync.Mutex
+	f     *os.File
+	buf   []os.FileInfo // read, not listed yet
+	next  int64         // offset of buf[0]
+	eof   bool
 }
 
 func (d *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
@@ -444,7 +450,11 @@ func (d *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
 }
 
 func (d *dirLister) Close() error {
-	return d.f.Close()
+	err := d.f.Close()
+	if d.cloud {
+		<-cloudSlots
+	}
+	return err
 }
 
 type listerAt []os.FileInfo

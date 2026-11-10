@@ -21,8 +21,10 @@ import (
 	"time"
 
 	"github.com/sylvinus/agent-vm/internal/cage"
+	"github.com/sylvinus/agent-vm/internal/diagnostics"
 	"github.com/sylvinus/agent-vm/internal/host"
 	"github.com/sylvinus/agent-vm/internal/managedproxy"
+	"github.com/sylvinus/agent-vm/internal/usererror"
 	"github.com/sylvinus/agent-vm/internal/version"
 	"golang.org/x/mod/semver"
 )
@@ -61,9 +63,14 @@ type State struct {
 	TotalBytes     int64  `json:"totalBytes,omitempty"`
 	Message        string `json:"message,omitempty"`
 	Retryable      bool   `json:"retryable,omitempty"`
+	RetryAt        string `json:"retryAt"`
 	ArchivePath    string `json:"archivePath,omitempty"`
 	SHA256         string `json:"sha256,omitempty"`
 }
+
+type proxyUnavailableError struct{ message string }
+
+func (e *proxyUnavailableError) Error() string { return e.message }
 
 // Run only accepts fixed operations. URLs and destinations come from the
 // verified repository response and the current private profile.
@@ -72,7 +79,14 @@ func Run(configPath string, args []string, output io.Writer) int {
 	state := State{CurrentVersion: version.Version}
 	emit := func() { _ = enc.Encode(state) }
 	fail := func(err error) int {
-		state.Phase, state.Message, state.Retryable = "failed", err.Error(), true
+		var unavailable *proxyUnavailableError
+		if len(args) == 1 && args[0] == "check" && errors.As(err, &unavailable) {
+			state.Phase, state.Message, state.Retryable = "waiting", err.Error(), true
+			emit()
+			return 0
+		}
+		_ = diagnostics.New(filepath.Dir(configPath)).Record("warn", "app-update", fmt.Sprintf("%v; cause=%v", err, errors.Unwrap(err)))
+		state.fail(err)
 		emit()
 		return 1
 	}
@@ -156,10 +170,10 @@ func managedClient(ctx context.Context, configPath string) (*http.Client, error)
 	profile := filepath.Dir(configPath)
 	p, err := managedproxy.Applied(profile, cfg.ProxyURL, cfg.ProxyRevision)
 	if err != nil {
-		return nil, errors.New("所选代理尚未应用，请在网络与代理中配置后重试")
+		return nil, &proxyUnavailableError{"所选代理尚未应用，更新检查将在代理就绪后重试"}
 	}
 	if !managedproxy.Running(ctx, profile, p) {
-		return nil, errors.New("所选代理未运行，请在网络与代理中启动后重试；更新不会改用主机直连")
+		return nil, &proxyUnavailableError{"所选代理未运行，更新检查将在代理就绪后重试；更新不会改用主机直连"}
 	}
 	egress, err := cage.NewEgress(cfg)
 	if err != nil {
@@ -208,18 +222,18 @@ func request(ctx context.Context, client *http.Client, raw string) (*http.Respon
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(ctx.Err(), context.Canceled) {
 			return nil, errors.New("更新下载已取消")
 		}
-		return nil, errors.New("无法通过所选代理连接更新源，请检查网络后重试")
+		return nil, usererror.Wrap("连接应用更新源", errors.Join(ctx.Err(), err), "请在网络与代理设置中确认所选节点可以连接 GitHub，再检查更新。")
 	}
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		switch resp.StatusCode {
 		case 404:
-			return nil, errors.New("更新源暂不可访问：仓库尚未公开或该发行包不可用")
+			return nil, errors.New("更新源找不到请求的版本或安装包（HTTP 404）。请稍后检查更新；需要手动安装时，请核对 Cage 发布页面中的对应平台文件。")
 		case 403, 429:
-			return nil, errors.New("更新源请求受限，请稍后重试")
+			return nil, updateSourceError(resp, time.Now())
 		default:
 			return nil, fmt.Errorf("更新源返回 HTTP %d，请稍后重试", resp.StatusCode)
 		}

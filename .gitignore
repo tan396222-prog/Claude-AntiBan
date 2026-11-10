@@ -3,8 +3,7 @@
 node_modules
 dist
 /_output
-# Scratch checkouts and patch files for working on patches/. third_party/
-# holds what is built.
+# Local scratch checkouts. third_party/ holds compiled dependency source.
 /lima/
 /lima-pr/
 /tmp/
@@ -26,11 +25,62 @@ dist
 *.keychain-db
 /promo/out/
 
-# Local diagnostics and UI design/acceptance workspaces. Public media lives in promo/.
+# Local diagnostics and UI design/acceptance workspaces.
 /output/
 /ui/.oil-ui/
 /ui/_output/
 
-# Rendered promo export; reproducible source and assets are in promo/.
+# Promotional exports are local-only.
 /claude-cage-promo.mp4
 /.vite/
+
+/internal/tailnetassets/assets/*.gz
+
+# Local test/compiler output; keep test source and fixtures tracked.
+__pycache__/
+/scripts/guest-os/**/bin/
+/scripts/guest-os/**/obj/
+/.cage-mount-probe-*
+/config.log
+/logs/*.log
+
+# Local development material; public docs describe installation and use.
+/AGENTS.md
+/CONTRIBUTING.md
+/RELEASING.md
+/CHANGELOG.md
+/docs/design/
+/docs/research/
+/docs/BACKLOG.md
+/docs/agent-vm-upstream.md
+/docs/ci-cd.md
+/docs/public-releases.md
+/docs/releasing.md
+/promo/
+/ui/prototypes/
+/.oil-ui/
+/www/README.md
+/tools/tailnet/README.md
+/scripts/guest-os/macos-setup-view.md
+/internal/exitpolicy/data/README.md
+
+# Upstream maintenance and provenance; compiled source and licenses stay tracked.
+/third_party/SOURCES
+/third_party/**/*.md
+/third_party/**/*.rst
+/third_party/**/*.adoc
+/third_party/*/.github/
+/third_party/*/.gitignore
+/third_party/*/.gitattributes
+/patches/README.md
+/scripts/third-party-sync
+/release.sh
+/tests/release.sh
+/flake.nix
+/flake.lock
+/packaging/nfpm.yaml
+/ui/vendor/novnc/README.cage.md
+/ui/vendor/novnc/vendor/pako/README.md
+
+# Unfinished local native file-open prototype, excluded from compilation.
+/scripts/guest-os/guest-clipboard-windows/WindowsNativeOpen.cs.local

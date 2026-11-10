@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/paths"
 	"github.com/sylvinus/agent-vm/internal/state"
 	"github.com/sylvinus/agent-vm/internal/vm"
@@ -107,6 +109,44 @@ func TestCageRefusesSecondActiveEnvironment(t *testing.T) {
 	}
 	if len(se.g.ran) != 0 {
 		t.Fatal("command entered a guest before the workspace check")
+	}
+}
+
+func TestCageProjectGitWritesAndStoppedMountMigration(t *testing.T) {
+	se := newStartEnv(t)
+	se.base()
+	if code := se.run("run", "true"); code != 0 {
+		t.Fatalf("initial protected mount: %d %s", code, se.out())
+	}
+	name := vmname.Name(se.proj)
+	inst := se.fake.VMs[name]
+	if inst == nil || len(inst.Mounts) != 1 || unprotected(inst, nil) != "" {
+		t.Fatal("initial mount did not protect Git")
+	}
+	inst.Status = vm.Stopped
+	configPath := filepath.Join(se.home, "cage-config.json")
+	data, err := json.Marshal(cage.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CAGE_CONFIG", configPath)
+	if code := se.run("run", "true"); code != 0 {
+		t.Fatalf("Cage migration: %d %s", code, se.out())
+	}
+	inst = se.fake.VMs[name]
+	if len(inst.Mounts) != 1 || !inst.Mounts[0].Writable || vm.Confined(inst) != nil {
+		t.Fatal("Cage lost the writable, confined project mount")
+	}
+	for _, n := range inst.Mounts[0].SSHFS.ReadonlyNames {
+		if n == ".git" {
+			t.Fatal("Cage retained Git write protection")
+		}
+	}
+	if code := se.run("run", "true"); code != 0 {
+		t.Fatalf("Cage reuse required confirmation: %d %s", code, se.out())
 	}
 }
 

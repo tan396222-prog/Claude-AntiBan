@@ -16,12 +16,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/lima-vm/lima/v2/pkg/driverutil"
 	"github.com/lima-vm/lima/v2/pkg/guestagent/api"
 	"github.com/lima-vm/lima/v2/pkg/hostagent/events"
 	"github.com/lima-vm/lima/v2/pkg/limatype"
 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
 	"github.com/lima-vm/lima/v2/pkg/limayaml"
 	"github.com/lima-vm/lima/v2/pkg/portfwd"
+	"github.com/lima-vm/lima/v2/pkg/registry"
 
 	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/limaembed"
@@ -67,7 +69,7 @@ func TestCageDebianMirrors(t *testing.T) {
 	}
 	earlyAPT := false
 	for _, step := range instance.Config.Provision {
-		if step.Mode == limatype.ProvisionModeDependency && step.Script != nil && *step.Script == cage.DebianMirrorsScript {
+		if step.Mode == limatype.ProvisionModeDependency && step.Script != nil && *step.Script == cage.DebianPrepareScript {
 			earlyAPT = true
 		}
 	}
@@ -84,7 +86,7 @@ func TestCageDebianMirrors(t *testing.T) {
 		if len(images) != 3 {
 			t.Fatalf("%s: expected two mirrors and one upstream, got %+v", arch, images)
 		}
-		for i, base := range []string{"https://mirrors.nju.edu.cn/debian-cdimage/cloud/", "https://mirrors.ustc.edu.cn/debian-cdimage/cloud/", "https://cloud.debian.org/images/cloud/"} {
+		for i, base := range []string{"https://cloud.debian.org/images/cloud/", "https://mirrors.nju.edu.cn/debian-cdimage/cloud/", "https://mirrors.ustc.edu.cn/debian-cdimage/cloud/"} {
 			if !strings.HasPrefix(images[i].Location, base) || images[i].Digest != images[2].Digest || images[i].Digest.Validate() != nil {
 				t.Fatalf("unexpected image or missing pin: %+v", images[i])
 			}
@@ -486,6 +488,48 @@ func TestUserLimaHome(t *testing.T) {
 	}
 	if got := UserLimaHome(); got != "" {
 		t.Errorf("unset: %q", got)
+	}
+}
+
+func TestLimaDrivers(t *testing.T) {
+	l := newTestLima(t)
+	ctx := t.Context()
+	none := []Mount{}
+	if err := l.Create(ctx, "base", "template:debian-13", Settings{Mounts: &none}, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{limatype.QEMU, limatype.VZ} {
+		if registry.CheckInternalOrExternal(kind) != registry.Internal {
+			continue
+		}
+		t.Run(kind, func(t *testing.T) {
+			first, err := l.inspect(ctx, "base")
+			if err != nil {
+				t.Fatal(err)
+			}
+			second, err := l.inspect(ctx, "base")
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.Dir = filepath.Join(first.Dir, "first")
+			second.Dir = filepath.Join(second.Dir, "second")
+			first.Config.VMType = &kind
+			second.Config.VMType = &kind
+			firstDriver, err := driverutil.CreateConfiguredDriver(ctx, first, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			secondDriver, err := driverutil.CreateConfiguredDriver(ctx, second, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if firstDriver.Driver == secondDriver.Driver || firstDriver.Info(ctx).InstanceDir != first.Dir {
+				t.Fatal("configuring another VM changed the first VM's driver")
+			}
+			if secondDriver.Info(ctx).InstanceDir != second.Dir {
+				t.Fatal("the second driver lost its instance")
+			}
+		})
 	}
 }
 

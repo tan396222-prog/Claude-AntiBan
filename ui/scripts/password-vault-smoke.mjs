@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createWorkbench } from "./workbench-fixture.mjs";
-const output = fileURLToPath(new URL("../../docs/test-reports/2026-11-05-password-vault/", import.meta.url));
+const output = process.env.CAGE_VAULT_CAPTURE || fileURLToPath(new URL("../../docs/test-reports/2026-11-05-password-vault/", import.meta.url));
 await fs.mkdir(output, { recursive: true });
 let clipboard = "";
 const { browser, page, state, errors } = await createWorkbench({ nativeRequest: async ({ action, text }) => {
@@ -94,8 +94,9 @@ try {
   state.tabs = [{ id: "web-vault", title: "邮箱", kind: "web", url: "https://mail.example.test/login" }]; state.active = "web-vault";
   await page.reload();
   await page.getByRole("button", { name: "打开浏览器", exact: true }).click();
-  await page.getByRole("button", { name: /密码 · 1 个账号/ }).waitFor();
-  const trigger = page.getByRole("button", { name: /密码 · 1 个账号/ });
+  await page.getByRole("button", { name: "浏览器菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: /密码 · 1 个账号/ }).waitFor();
+  const trigger = page.getByRole("menuitem", { name: /密码 · 1 个账号/ });
   const before = await page.locator(".browser-chrome").boundingBox();
   await trigger.press("Enter");
   const picker = page.getByRole("region", { name: "当前网站的密码" });
@@ -106,9 +107,12 @@ try {
   await page.keyboard.press("Enter");
   await page.getByRole("status").filter({ hasText: "已填写" }).waitFor();
   assert.equal(filled, entries[0].id);
+  const filledHeight = (await page.locator(".browser-chrome").boundingBox()).height;
+  const pickerHeight = (await picker.boundingBox()).height;
   await trigger.press("Escape");
   await picker.waitFor({ state: "hidden" });
-  assert.equal(Math.round((await page.locator(".browser-chrome").boundingBox()).height), Math.round(before.height));
+  assert.equal(Math.round((await page.locator(".browser-chrome").boundingBox()).height), Math.round(filledHeight - pickerHeight),
+    "closing the password picker releases its space while preserving the fill confirmation");
   candidate = { id: "pending", tab: "web-vault", origin: "https://mail.example.test", username: "work@example.test", password: "new-fixture-secret" };
   await page.getByText("更新此账号的密码？", { exact: true }).waitFor();
   await page.screenshot({ path: output + "vault-save-prompt.png" });

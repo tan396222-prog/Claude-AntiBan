@@ -1,6 +1,6 @@
 # 云端运行环境的构建与运维
 
-本目录面向部署 Cage 的维护者。云端运行控制服务和持久容器，本地客户端通过 SSH 使用工作台。容器文件系统、浏览器资料、开发工具及网络出口留在服务器；控制端口保持回环监听。运行边界见[云端部署设计](../../docs/design/cloud-deployment.md)。
+本目录面向部署 Cage 的维护者。云端运行控制服务和持久容器，本地客户端通过 SSH 使用工作台。容器文件系统、浏览器资料、开发工具及网络出口留在服务器；控制端口保持回环监听。运行边界见[云端使用指南](../../docs/guide/cloud.md)。
 
 这里提供开发构建材料，尚未发布云端镜像或安装包。`Dockerfile.guest` 构建 Debian 13 基础层，完整工具与 Cage 服务继续使用仓库中的共同安装脚本。基础层本身不能当作完整工作环境交付。本轮镜像与实机验证使用 Linux amd64；终端、浏览器、编辑器及 Claude Desktop 的 Chat/Code 安装路径可在无 KVM 容器内运行，依赖嵌套虚拟机的 Cowork 不在支持承诺内。Desktop 已验证安装、启动及欢迎页，未使用真实第三方账户验收聊天。
 
@@ -68,6 +68,8 @@ cage_engine="$HOME/.claude-cage/container-engine/tools/docker"
 先从同一份源码构建 Linux Cage 后端：`make cage GOOS=linux GOARCH=amd64 CGO_ENABLED=0`。构建会生成工作台资产及 `_output/bin/cage`；不运行发布或版本修改流程。
 
 通过 `Dockerfile.guest` 构建基础层，再创建独立的镜像构建容器。构建容器不挂载项目、个人主目录、代理配置或账户；安装下载使用单独的构建网络。默认 Debian 镜像已经固定 digest，APT 继续验证发行版签名。若部署网络需要镜像站，只调整构建阶段的 Debian 软件源，保留签名验证；基础层和完整镜像提交前均恢复 `deb.debian.org` 官方源，以符合运行环境的维护下载来源限制。
+
+基础层在批量安装前使用共同的 `internal/cage/apt-bootstrap.sh` 检查 APT；Debian 13 低于 3.0.4 时先通过官方安全源升级，升级下载禁用重试。`build-guest.sh` 将该脚本与 Dockerfile 复制到本次构建的临时上下文，部署工具包包含同一份脚本。升级失败会保留构建证据并停止后续安装。
 
 使用[完整镜像构建脚本](build-guest.sh)建立本次构建独占的父 slice、网络和容器。脚本检查实际 rootless 引擎和父层上限，再执行共同安装脚本；命名带唯一后缀，避免覆盖已有环境。
 

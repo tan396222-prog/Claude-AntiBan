@@ -1,15 +1,52 @@
-// A hidden, disposable context avoids touching account tabs, browser cookies,
-// focus or the visible tab strip while reading Chromium's actual settings.
+import { randomUUID } from "node:crypto";
+
+// Read settings in a background blank page in the user profile, excluded from
+// Cage's tab strip. Chromium's hidden-target path skips the profile's renderer
+// preferences and reads UI-locale defaults even in the default context.
+async function readBrowserSettings(cdp, exclusions, expectedTimezone) {
+  const url = `about:blank#cage-settings-${randomUUID()}`;
+  // Target events can arrive before the createTarget reply.
+  exclusions.add(url);
+  let targetId;
+  try {
+    ({ targetId } = await cdp("Target.createTarget", {
+      url, background: true, newWindow: false,
+    }));
+    const { sessionId } = await cdp("Target.attachToTarget", { targetId, flatten: true });
+    const response = await cdp("Runtime.evaluate", {
+      expression: `({timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        expected_timezone: new Intl.DateTimeFormat('en', {timeZone:${JSON.stringify(expectedTimezone)}}).resolvedOptions().timeZone,
+        language: navigator.language, languages: [...navigator.languages], platform: navigator.platform})`,
+      returnByValue: true,
+    }, sessionId);
+    if (response.exceptionDetails || !response.result?.value)
+      throw new Error("浏览器配置诊断未完成");
+    return response.result.value;
+  } finally {
+    if (targetId) {
+      try {
+        await cdp("Target.closeTarget", { targetId });
+        exclusions.delete(url);
+      } catch {
+        // Keep a page whose close failed excluded until the browser exits.
+      }
+    } else exclusions.delete(url);
+  }
+}
+
+// Network probes retain a disposable context with no account cookies.
 export async function auditBrowser(
   cdp,
-  auditContexts,
+  exclusions,
   network,
   expectedTimezone,
 ) {
+  const settings = await readBrowserSettings(cdp, exclusions, expectedTimezone);
+  if (!network) return settings;
   const { browserContextId } = await cdp("Target.createBrowserContext", {
     disposeOnDetach: true,
   });
-  auditContexts.add(browserContextId);
+  exclusions.add(browserContextId);
   let targetId;
   try {
     ({ targetId } = await cdp("Target.createTarget", {
@@ -56,9 +93,7 @@ export async function auditBrowser(
       if (!loaded) throw new Error("诊断页面尚未就绪");
     }
     const expression = `(async () => {
-      const result = {timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        expected_timezone: new Intl.DateTimeFormat('en', {timeZone:${JSON.stringify(expectedTimezone)}}).resolvedOptions().timeZone,
-        language: navigator.language, languages: [...navigator.languages], platform: navigator.platform};
+      const result = {};
       if (${network ? "true" : "false"}) {
         if (location.hostname !== '198.18.0.254') throw new Error('diagnostic navigation incomplete');
         try {
@@ -76,7 +111,7 @@ export async function auditBrowser(
     );
     if (response.exceptionDetails || !response.result?.value)
       throw new Error("浏览器诊断未完成");
-    return response.result.value;
+    return { ...settings, ...response.result.value };
   } finally {
     try {
       // Hidden targets are owned by the CDP connection, not the context's tab
@@ -84,7 +119,7 @@ export async function auditBrowser(
       // hidden page still references the context. Close it before disposal.
       if (targetId) await cdp("Target.closeTarget", { targetId });
       await cdp("Target.disposeBrowserContext", { browserContextId });
-      auditContexts.delete(browserContextId);
+      exclusions.delete(browserContextId);
     } catch {
       // If closing the page fails, leave its context alive and excluded from
       // user tabs. Disposing it anyway would recreate the browser crash.

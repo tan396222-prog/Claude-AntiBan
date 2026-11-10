@@ -1,11 +1,15 @@
 import { reportDiagnostic } from "./diagnostics.mjs";
-import { assertConnection, connectionHeaders, getClientContext } from "./client-context.mjs";
+import { httpErrorMessage, connectionErrorMessage, operationName, nativeFailureMessage } from "./error-message.mjs";
+import { assertConnection, connectionHeaders, getClientContext, isProjectSharesPath } from "./client-context.mjs";
+import { installAgentNativeConsumer } from "./agent-native.js";
 let sessionRenewal;
-async function responseError(response) {
+class WorkbenchUnreachable extends Error {}
+async function responseError(response, path, method = "GET") {
   const error = new Error(
-    (await response.text()).trim() || "连接未完成，请重试",
+    httpErrorMessage(path, response.status, await response.text(), response.headers.get("Content-Type") || "", method),
   );
   error.status = response.status;
+  error.recovery = response.headers.get("X-Cage-Recovery") || "";
   return error;
 }
 async function renewSession() {
@@ -22,23 +26,30 @@ async function renewSession() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token: entry.hash.slice(1) }),
       });
-      if (!response.ok) throw await responseError(response);
+      if (!response.ok) throw await responseError(response, "/session");
     })().finally(() => {
       sessionRenewal = null;
     });
   }
   return sessionRenewal;
 }
-export async function api(path, body, method) {
+export async function api(path, body, method, headers = {}, { signal } = {}) {
   const connection = getClientContext().connection_id;
   const options = {
     method: method || (body === undefined ? "GET" : "POST"),
-    headers: { ...connectionHeaders(path), ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
+    headers: { ...connectionHeaders(path), ...(body === undefined ? {} : { "Content-Type": "application/json" }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal,
   };
   const send = async () => {
     try { return await fetch("/api" + path, options); }
-    catch (error) { reportDiagnostic("frontend", error); throw error; }
+    catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      reportDiagnostic("frontend", error);
+      const message = connectionErrorMessage(path, options.method);
+      if (error instanceof TypeError) throw new WorkbenchUnreachable(message, { cause: error });
+      throw new Error(message, { cause: error });
+    }
   };
   let response = await send();
   // Authentication fails before a handler runs, so retrying this rejected
@@ -48,9 +59,11 @@ export async function api(path, body, method) {
     response = await send();
   }
   if (response.status === 423 && !path.startsWith("/client/")) window.dispatchEvent(new Event("cage-account-locked"));
-  if (!response.ok) throw await responseError(response);
-  const value = await response.json();
-  if (path !== "/session" && !path.startsWith("/client/")) assertConnection(connection);
+  if (!response.ok) throw await responseError(response, path, options.method);
+  let value;
+  try { value = await response.json(); }
+  catch (error) { reportDiagnostic("frontend", error); throw new Error(`${operationName(path, options.method)}失败：后台返回的结果格式无效。请重新连接；仍出现时在设置中导出诊断包。`, { cause: error }); }
+  if (path !== "/session" && !path.startsWith("/agent/native") && (!path.startsWith("/client/") || isProjectSharesPath(path))) assertConnection(connection);
   return value;
 }
 export async function uploadFile(path, file, { signal, onProgress } = {}) {
@@ -65,17 +78,19 @@ export async function uploadFile(path, file, { signal, onProgress } = {}) {
     request.setRequestHeader("Content-Type", "application/octet-stream");
     for (const [name, value] of Object.entries(headers)) request.setRequestHeader(name, value);
     request.upload.onprogress = event => onProgress?.(event.loaded, event.total || file.size);
-    request.onerror = () => { cleanup(); reject(new Error("文件传递中断，请重试")); };
+    request.onerror = () => { cleanup(); reject(new Error("上传文件失败：与 Cage 后台的连接中断。请恢复连接后核对目标是否已收到文件，再重新选择文件。")); };
     request.onabort = () => { cleanup(); reject(new DOMException("上传已取消", "AbortError")); };
     request.onload = () => {
       cleanup();
       if (request.status === 423) window.dispatchEvent(new Event("cage-account-locked"));
       if (request.status !== 200) {
-        const error = new Error(request.responseText.trim() || "文件传递未完成");
+        const error = new Error(httpErrorMessage(path, request.status, request.responseText, request.getResponseHeader("Content-Type") || ""));
         error.status = request.status; reject(error); return;
       }
-      try { assertConnection(connection); resolve(JSON.parse(request.responseText)); }
-      catch { reject(new Error("文件传递响应无效")); }
+      try { assertConnection(connection); }
+      catch (error) { reject(error); return; }
+      try { resolve(JSON.parse(request.responseText)); }
+      catch { reject(new Error("上传文件后未收到有效确认。请先核对目标是否已收到文件，避免重复上传；仍失败时导出诊断包。")); }
     };
     signal?.addEventListener("abort", abort, { once: true });
     request.send(file);
@@ -87,20 +102,47 @@ export async function uploadFile(path, file, { signal, onProgress } = {}) {
     return send();
   }
 }
-export const nativeAvailable = () =>
-  Boolean(window.webkit?.messageHandlers?.cage);
+const nativeBridge = () =>
+  window.cageNativeBridge || window.webkit?.messageHandlers?.cage;
+export const nativeAvailable = () => Boolean(nativeBridge());
+const lostLocalView = (context) =>
+  context.desktop_gateway && context.mode === "local" &&
+  context.connection?.state === "failed" && context.connection.error_code === "connection_lost";
+
+async function suspendBeforeQuit(context) {
+  if (context.mode !== "local" || context.client_only || lostLocalView(context)) return;
+  try {
+    await api("/account/suspend", {});
+  } catch (error) {
+    if (error.status === 423) return;
+    // The first request after CLI shutdown can fail before the next context poll.
+    if (context.desktop_gateway && [409, 502].includes(error.status)) {
+      const latest = await api("/client/context");
+      if (latest.connection_id === context.connection_id && lostLocalView(latest)) return;
+    }
+    throw error;
+  }
+}
 export async function native(action, extra = {}) {
-  const connection = getClientContext().connection_id;
-  if (action === "quitNow" && getClientContext().mode === "local" && !getClientContext().client_only) {
-    try { await api("/account/suspend", {}); }
-    catch (error) { if (error.status !== 423) throw error; }
+  const context = getClientContext();
+  const connection = context.connection_id;
+  if (action === "quitNow") {
+    try { await suspendBeforeQuit(context); }
+    catch (error) { if (!(error instanceof WorkbenchUnreachable)) throw error; }
+    assertConnection(connection);
   }
   try {
-    const result = await window.webkit.messageHandlers.cage.postMessage({ action, ...extra, connection_id: connection });
+    const result = await nativeBridge().postMessage({ action, ...extra, connection_id: connection });
     assertConnection(connection);
     return result;
   }
-  catch (error) { reportDiagnostic("frontend", error); throw error; }
+  catch (error) {
+    reportDiagnostic("frontend", error);
+    const original = error?.message || String(error);
+    const message = nativeFailureMessage(action, original);
+    if (message === original) throw error;
+    throw new Error(message, { cause: error });
+  }
 }
 export const readClipboard = () =>
   nativeAvailable() ? native("clipboardRead") : navigator.clipboard.readText();
@@ -123,3 +165,5 @@ export function normalizeURL(text) {
     ).href;
   return "https://www.google.com/search?q=" + encodeURIComponent(value);
 }
+
+installAgentNativeConsumer({ api, native, nativeAvailable, getContext: getClientContext });

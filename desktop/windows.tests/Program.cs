@@ -1,5 +1,19 @@
 using Cage.Windows;
 
+if (args is ["smoke-wait", var smokeRelease])
+{
+    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+    while (!File.Exists(smokeRelease)) await Task.Delay(20, deadline.Token);
+    return;
+}
+
+if (args is ["app-update", "check" or "download"])
+{
+    File.AppendAllText(Path.Combine(Backend.Root, "retry-invocations"), "x");
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { phase = "failed", message = "limited", retryable = true, retryAt = Environment.GetEnvironmentVariable("CAGE_UPDATE_RETRY_AT") }));
+    Environment.Exit(1);
+}
+
 // The recovery integration tests launch a copy of this executable through the
 // same subprocess/JSON boundary used by the shipped updater.
 if (args is ["prepare-update", "--json", "--stop"])
@@ -15,6 +29,10 @@ if (args is ["prepare-update", "--json", "--stop"])
     return;
 }
 
+#if WINDOWS
+NativeInputTests.Run();
+#endif
+
 var assertions = 0;
 void Check(bool condition, string message) { assertions++; if (!condition) throw new Exception(message); }
 void Reject(Action action, string message)
@@ -23,6 +41,26 @@ void Reject(Action action, string message)
     try { action(); } catch (InvalidDataException) { return; }
     throw new Exception(message);
 }
+foreach (var (work, dpi) in new[] {
+    (new System.Drawing.Rectangle(0, 0, 3840, 2080), 96),
+    (new System.Drawing.Rectangle(0, 0, 3840, 2080), 192),
+    (new System.Drawing.Rectangle(0, 0, 1920, 1040), 144),
+    (new System.Drawing.Rectangle(0, 0, 1366, 728), 96),
+    (new System.Drawing.Rectangle(-1920, 0, 1920, 1040), 96),
+    (new System.Drawing.Rectangle(0, 0, 1280, 680), 192),
+})
+{
+    var bounds = WindowLayout.Bounds(work, dpi, null);
+    Check(work.Contains(bounds), "initial window extends beyond the monitor work area");
+    Check(bounds.Width >= WindowLayout.Minimum(work, dpi).Width, "initial window is below its DPI-aware minimum");
+    var restored = WindowLayout.Bounds(work, dpi, new WindowPlacement(5000, 3000, 5000, 4000, 96, false));
+    Check(work.Contains(restored), "saved window is inaccessible after a monitor or DPI change");
+}
+Check(WindowLayout.Bounds(new(0, 0, 3840, 2080), 96, null).Width > 2500, "4K window stayed at a fixed 1280 pixels");
+Check(WindowLayout.Bounds(new(0, 0, 3840, 2080), 192, new(100, 100, 1000, 700, 96, false)).Width == 2000,
+    "restoring a user size did not account for the new monitor DPI");
+Console.WriteLine($"Windows window layout: {assertions} assertions passed.");
+assertions = 0;
 Check(UpdatePolicy.IsWorkbench("http://localhost:4321/", 4321), "expected local origin rejected");
 foreach (var origin in new[] { "https://localhost:4321/", "http://localhost:4322/", "http://localhost.evil:4321/", "http://user@localhost:4321/", "http://127.0.0.1:4321/", "file:///C:/workbench.html" })
     Check(!UpdatePolicy.IsWorkbench(origin, 4321), "foreign native bridge origin accepted: " + origin);
@@ -43,7 +81,7 @@ foreach (var path in new[] { Path.Combine(root + "-other", "download-abc", "Cage
     Reject(() => UpdatePolicy.DownloadPath(path, root), "untrusted download path accepted: " + path);
 Console.WriteLine($"Windows update/bridge policy: {assertions} assertions passed.");
 
-var integration = Path.Combine(Path.GetTempPath(), "cage-recovery-" + Guid.NewGuid());
+var integration = Path.Combine(OperatingSystem.IsMacOS() ? "/private/tmp" : Path.GetTempPath(), "cage-recovery-" + Guid.NewGuid());
 Directory.CreateDirectory(integration);
 var savedProfile = Environment.GetEnvironmentVariable("CLAUDE_CAGE_CONFIG");
 try
@@ -63,6 +101,49 @@ try
         if (broken) File.WriteAllText(Path.Combine(resources, "broken-backend"), "cannot start");
     }
     InstallFixture(backup, false); InstallFixture(candidate, true);
+    var snapshotSource = Path.Combine(integration, "snapshot source");
+    var snapshotTarget = Path.Combine(integration, "snapshot target");
+    Directory.CreateDirectory(Path.Combine(snapshotSource, "my-project"));
+    File.WriteAllText(Path.Combine(snapshotSource, "program.txt"), "program");
+    File.WriteAllText(Path.Combine(snapshotSource, "my-project", "work.txt"), "personal data");
+    File.WriteAllText(Path.Combine(snapshotSource, "Cage.install-files.json"), System.Text.Json.JsonSerializer.Serialize(new {
+        version = 1, files = new[] { new { path = "program.txt", sha256 = new string('a', 64) } },
+    }));
+    var copyTree = typeof(UpdateInstaller).GetMethod("CopyTree", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    copyTree.Invoke(null, [snapshotSource, snapshotTarget]);
+    Check(File.ReadAllText(Path.Combine(snapshotTarget, "program.txt")) == "program", "update snapshot missed a declared program file");
+    Check(!Directory.Exists(Path.Combine(snapshotTarget, "my-project")), "update snapshot copied live user data into the program rollback snapshot");
+    Check(File.ReadAllText(Path.Combine(snapshotSource, "my-project", "work.txt")) == "personal data", "snapshot changed personal data");
+    var nestedSnapshot = Path.Combine(snapshotSource, "updates", "backup");
+    var rejectedNestedSnapshot = false;
+    try { copyTree.Invoke(null, [snapshotSource, nestedSnapshot]); }
+    catch (System.Reflection.TargetInvocationException error) when (error.InnerException is InvalidDataException) { rejectedNestedSnapshot = true; }
+    Check(rejectedNestedSnapshot, "snapshot recursively copied its own output");
+    Check(!Directory.Exists(nestedSnapshot), "overlapping snapshot destination was created before validation");
+    var ensureComplete = typeof(UpdateInstaller).GetMethod("EnsureInstallationComplete", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+    ensureComplete.Invoke(null, [snapshotSource]);
+    var recoveryReceipt = snapshotSource + ".cage-installation.json";
+    File.WriteAllText(recoveryReceipt, System.Text.Json.JsonSerializer.Serialize(new { stagePath = candidate, backupPath = backup }));
+    string? pendingRecovery = null;
+    try { ensureComplete.Invoke(null, [snapshotSource]); }
+    catch (System.Reflection.TargetInvocationException error) when (error.InnerException is IOException) { pendingRecovery = error.InnerException.Message; }
+    Check(pendingRecovery != null, "updater accepted a partially restored installation");
+    Check(pendingRecovery!.Contains(candidate) && pendingRecovery.Contains(backup), "recovery error omitted the preserved directories");
+    Check(File.Exists(recoveryReceipt), "recovery validation removed the persistent receipt");
+    File.Delete(recoveryReceipt);
+    var rejectedMissingInstallation = false;
+    try { ensureComplete.Invoke(null, [Path.Combine(integration, "missing installation")]); }
+    catch (System.Reflection.TargetInvocationException error) when (error.InnerException is IOException) { rejectedMissingInstallation = true; }
+    Check(rejectedMissingInstallation, "updater accepted a missing installation and could restore a program-only snapshot");
+    if (!OperatingSystem.IsWindows())
+    {
+        File.Delete(Path.Combine(snapshotSource, "Cage.install-files.json"));
+        Directory.CreateSymbolicLink(Path.Combine(snapshotSource, "external-link"), Path.Combine(snapshotSource, "my-project"));
+        var legacySnapshot = Path.Combine(integration, "legacy snapshot");
+        copyTree.Invoke(null, [snapshotSource, legacySnapshot]);
+        Check(File.ReadAllText(Path.Combine(legacySnapshot, "my-project", "work.txt")) == "personal data", "legacy snapshot missed a regular file");
+        Check(!Directory.Exists(Path.Combine(legacySnapshot, "external-link")), "legacy snapshot followed a user link");
+    }
     await UpdateRecovery.PrepareRollback(backup);
     Check(File.Exists(Path.Combine(backup, "resources", "controller-invoked")), "recovery did not execute the old backend");
     Check(!File.Exists(Path.Combine(candidate, "resources", "controller-invoked")), "recovery executed the broken candidate backend");
@@ -92,7 +173,68 @@ try
         locked?.Dispose();
         if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(garbage, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
     }
-    Console.WriteLine($"Windows recovery integration: {assertions - 22} assertions passed; actual child process and filesystem failures exercised.");
+    Console.WriteLine($"Windows snapshot/recovery integration: {assertions - 22} assertions passed; actual child process and filesystem failures exercised.");
+
+    // Exercise the production updater's streamed state and process-exit path.
+    var nativeResources = Path.Combine(AppContext.BaseDirectory, "resources");
+    if (Directory.Exists(nativeResources)) throw new IOException("retry fixture requires an unused test resources directory");
+    Directory.CreateDirectory(nativeResources);
+    var savedRetry = Environment.GetEnvironmentVariable("CAGE_UPDATE_RETRY_AT");
+    try
+    {
+        foreach (var file in Directory.EnumerateFiles(AppContext.BaseDirectory)) File.Copy(file, Path.Combine(nativeResources, Path.GetFileName(file)));
+        var executable = Path.Combine(nativeResources, "cage.exe");
+        File.Copy(Environment.ProcessPath!, executable, true);
+        if (!OperatingSystem.IsWindows()) File.SetUnixFileMode(executable, File.GetUnixFileMode(Environment.ProcessPath!));
+        var release = Path.Combine(integration, "smoke-release");
+        using (var owned = System.Diagnostics.Process.Start(Backend.StartInfo(executable, "smoke-wait", release))!)
+        {
+            var record = Path.Combine(Backend.Root, "control.json");
+            Directory.CreateDirectory(Backend.Root);
+            var controllers = new List<System.Diagnostics.Process>();
+            try
+            {
+                File.WriteAllText(record, System.Text.Json.JsonSerializer.Serialize(new { pid = Environment.ProcessId }));
+                var foreignRejected = false;
+                try { Backend.CaptureSmokeControllers(); } catch (IOException) { foreignRejected = true; }
+                Check(foreignRejected, "smoke captured a controller outside its application executable");
+                File.WriteAllText(record, System.Text.Json.JsonSerializer.Serialize(new { pid = owned.Id }));
+                controllers = Backend.CaptureSmokeControllers();
+                Check(controllers.Count == 1 && !controllers[0].HasExited, "smoke did not pin its live controller");
+                var exit = controllers[0].WaitForExitAsync();
+                Check(!exit.IsCompleted, "smoke considered a still-running controller stopped");
+                File.WriteAllText(release, "release owned child");
+                await exit.WaitAsync(TimeSpan.FromSeconds(5));
+                Check(controllers[0].HasExited, "smoke did not observe actual controller exit");
+            }
+            finally
+            {
+                File.WriteAllText(release, "release owned child");
+                if (!owned.WaitForExit(5000)) { owned.Kill(); owned.WaitForExit(); }
+                foreach (var controller in controllers) controller.Dispose();
+                File.Delete(record);
+            }
+        }
+        Console.WriteLine("Windows smoke shutdown: actual controller handle pinned, foreign executable rejected, process exit observed.");
+        var retryAt = DateTimeOffset.UtcNow.AddHours(1).ToString("yyyy-MM-dd'T'HH:mm:ss'Z'");
+        Directory.CreateDirectory(Backend.Root);
+        Environment.SetEnvironmentVariable("CAGE_UPDATE_RETRY_AT", retryAt);
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failures = 0;
+        using var updater = new AppUpdater(state => { if (state.GetValueOrDefault("phase") as string == "failed" && Interlocked.Increment(ref failures) == 2) completion.TrySetResult(); }, () => throw new Exception("unexpected installation"), () => {});
+        updater.Handle("check");
+        await completion.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Check(updater.Handle("status").GetValueOrDefault("retryAt") as string == retryAt, "process-exit path lost retry deadline");
+        updater.Handle("check"); updater.Handle("install");
+        await Task.Delay(100);
+        Check(File.ReadAllText(Path.Combine(Backend.Root, "retry-invocations")) == "x", "native check/install bypassed server cooldown");
+        Console.WriteLine("Windows updater protocol: real subprocess preserved deadline; early check/install blocked.");
+    }
+    finally
+    {
+        Environment.SetEnvironmentVariable("CAGE_UPDATE_RETRY_AT", savedRetry);
+        Directory.Delete(nativeResources, true);
+    }
 }
 finally {
     Environment.SetEnvironmentVariable("CLAUDE_CAGE_CONFIG", savedProfile);

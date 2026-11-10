@@ -52,6 +52,95 @@ test("quitting a remote client never suspends the cloud account", async (t) => {
   assert.deepEqual(request, { action: "quitNow", connection_id: "first" });
 });
 
+const localGateway = (state) => ({
+  mode: "local", desktop_gateway: true, connection_id: "local-view",
+  connection: { state, error_code: state === "failed" ? "connection_lost" : "" },
+});
+
+test("quit still reaches the desktop after the selected CLI controller exits", async (t) => {
+  environment(t);
+  setClientContext(localGateway("connected"));
+  const calls = [];
+  let status;
+  globalThis.fetch = async (path) => {
+    calls.push(path);
+    if (path === "/api/client/context") return Response.json(localGateway("failed"));
+    return new Response("connection unavailable", { status });
+  };
+  window.webkit.messageHandlers.cage.postMessage = ({ action }) => calls.push(action);
+  for (status of [502, 409]) {
+    calls.length = 0;
+    await native("quitNow");
+    assert.deepEqual(calls, ["/api/account/suspend", "/api/client/context", "quitNow"]);
+  }
+  calls.length = 0;
+  setClientContext(localGateway("failed"));
+  await native("quitNow");
+  assert.deepEqual(calls, ["quitNow"]);
+});
+
+test("a disconnected view from another generation cannot authorize a pending quit", async (t) => {
+  environment(t);
+  setClientContext(localGateway("connected"));
+  globalThis.fetch = async (path) => path === "/api/client/context"
+    ? Response.json({ ...localGateway("failed"), connection_id: "replacement" })
+    : new Response("view changed", { status: 409 });
+  window.webkit.messageHandlers.cage.postMessage = () => assert.fail("stale quit");
+  await assert.rejects(native("quitNow"), { status: 409 });
+});
+
+test("quit still reaches the desktop when the CLI HTTP listener is gone", async (t) => {
+  environment(t);
+  setClientContext({ mode: "local", connection_id: "local" });
+  globalThis.fetch = async (path) => {
+    if (path === "/api/diagnostics/events") return Response.json({});
+    assert.equal(path, "/api/account/suspend");
+    throw new TypeError("Failed to fetch");
+  };
+  const actions = [];
+  window.webkit.messageHandlers.cage.postMessage = ({ action }) => actions.push(action);
+  await native("quitNow");
+  assert.deepEqual(actions, ["quitNow"]);
+});
+
+test("an offline quit cannot cross a connection change during account suspension", async (t) => {
+  environment(t);
+  setClientContext(localGateway("connected"));
+  let failRequest;
+  globalThis.fetch = (path) => {
+    if (path === "/api/diagnostics/events") return Promise.resolve(Response.json({}));
+    return new Promise((resolve, reject) => { failRequest = reject; });
+  };
+  window.webkit.messageHandlers.cage.postMessage = () => assert.fail("stale quit");
+  const quitting = native("quitNow");
+  setClientContext({ ...localGateway("connected"), connection_id: "replacement" });
+  failRequest(new TypeError("Failed to fetch"));
+  await assert.rejects(quitting, { code: "connection_changed" });
+});
+
+test("a reachable local controller must lock or report already locked before quit", async (t) => {
+  environment(t);
+  setClientContext(localGateway("connected"));
+  window.dispatchEvent = () => {};
+  const calls = [];
+  let status = 500;
+  globalThis.fetch = async (path) => {
+    calls.push(path);
+    if (path === "/api/client/context") return Response.json(localGateway("connected"));
+    return Response.json({}, { status });
+  };
+  window.webkit.messageHandlers.cage.postMessage = ({ action }) => calls.push(action);
+  for (status of [500, 409, 502]) {
+    await assert.rejects(native("quitNow"), { status });
+    assert.ok(!calls.includes("quitNow"));
+  }
+  for (status of [200, 423]) {
+    calls.length = 0;
+    await native("quitNow");
+    assert.deepEqual(calls, ["/api/account/suspend", "quitNow"]);
+  }
+});
+
 test("an account device operation retains its host generation and rejects a late result", async (t) => {
   environment(t);
   let release;

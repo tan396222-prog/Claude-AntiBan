@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	agentvm "github.com/sylvinus/agent-vm"
 	"github.com/sylvinus/agent-vm/internal/vm/vmtest"
 )
 
@@ -17,7 +18,7 @@ func TestLicenses(t *testing.T) {
 	// binary: Apache-2.0 (with Lima's NOTICE), BSD-2 and BSD-3 ones.
 	for _, want := range []string{
 		"MIT License", "Copyright (c) 2026 Sylvain Zimmer",
-		"third_party/ holds", "section 4(b)",
+		agentvm.Notice,
 		"github.com/lima-vm/lima/v2 ./third_party/lima: LICENSE",
 		"github.com/lima-vm/lima/v2 ./third_party/lima: NOTICE",
 		"github.com/lima-vm/sshocker ./third_party/sshocker: LICENSE",

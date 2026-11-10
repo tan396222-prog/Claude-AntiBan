@@ -1,0 +1,97 @@
+Subject: [PATCH] Open independent Windows SSH connections for resource probes
+
+diff --git a/pkg/hostagent/resources.go b/pkg/hostagent/resources.go
+index 0fc1e79..8158552 100644
+--- a/pkg/hostagent/resources.go
++++ b/pkg/hostagent/resources.go
+@@ -8,12 +8,14 @@ import (
+ 	"errors"
+ 	"io"
+ 	"os/exec"
++	"runtime"
+ 	"strconv"
+ 	"sync"
+ 	"time"
+ 
+ 	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype"
++	"github.com/lima-vm/lima/v2/pkg/sshutil"
+ )
+ 
+ // ManageResources is an optional embedding hook. It starts after the driver and
+@@ -33,11 +35,7 @@ func (a *HostAgent) startResourceManager(ctx context.Context) func() {
+ 		return func() {}
+ 	}
+ 	read := func(ctx context.Context, script string) ([]byte, error) {
+-		args := append([]string{}, a.sshConfig.Args()...)
+-		args = append(args, "-o", "ConnectTimeout=2", "-o", "ClearAllForwardings=yes", "-T", "-p", strconv.Itoa(a.sshLocalPort), a.instSSHAddress, "--", script)
+-		cmd := exec.CommandContext(ctx, a.sshConfig.Binary(), args...)
+-		hideResourceProbe(cmd)
+-		cmd.WaitDelay = time.Second
++		cmd := a.resourceProbeCommand(ctx, script)
+ 		pipe, err := cmd.StdoutPipe()
+ 		if err != nil {
+ 			return nil, err
+@@ -57,3 +55,16 @@ func (a *HostAgent) startResourceManager(ctx context.Context) func() {
+ 	var once sync.Once
+ 	return func() { once.Do(stop) }
+ }
++
++func (a *HostAgent) resourceProbeCommand(ctx context.Context, script string) *exec.Cmd {
++	args := a.sshConfig.Args()
++	if runtime.GOOS == "windows" {
++		// The bundled Windows SSH client cannot run the probe over Lima's mux socket.
++		args = sshutil.DisableControlMasterOptsFromSSHArgs(args)
++	}
++	args = append(args, "-o", "ConnectTimeout=2", "-o", "ClearAllForwardings=yes", "-T", "-p", strconv.Itoa(a.sshLocalPort), a.instSSHAddress, "--", script)
++	cmd := exec.CommandContext(ctx, a.sshConfig.Binary(), args...)
++	hideResourceProbe(cmd)
++	cmd.WaitDelay = time.Second
++	return cmd
++}
+diff --git a/pkg/hostagent/resources_test.go b/pkg/hostagent/resources_test.go
+new file mode 100644
+index 0000000..30e5726
+--- /dev/null
++++ b/pkg/hostagent/resources_test.go
+@@ -0,0 +1,40 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package hostagent
++
++import (
++	"context"
++	"runtime"
++	"slices"
++	"testing"
++
++	"github.com/lima-vm/sshocker/pkg/ssh"
++)
++
++func TestResourceProbeCommand(t *testing.T) {
++	agent := HostAgent{
++		sshLocalPort: 60022, instSSHAddress: "127.0.0.1",
++		sshConfig: &ssh.SSHConfig{AdditionalArgs: []string{
++			"-o", "IdentityFile=private-instance-key", "-o", "ControlMaster=auto",
++			"-o", "ControlPath=instance/ssh.sock", "-o", "ControlPersist=5m",
++		}},
++	}
++	configured := slices.Clone(agent.sshConfig.Args())
++	const probe = "cat /proc/meminfo"
++	cmd := agent.resourceProbeCommand(context.Background(), probe)
++	want := slices.Clone(configured)
++	if runtime.GOOS == "windows" {
++		want = []string{
++			"-o", "ControlMaster=no", "-o", "ControlPath=none", "-o", "ControlPersist=no",
++			"-o", "IdentityFile=private-instance-key",
++		}
++	}
++	want = append(want, "-o", "ConnectTimeout=2", "-o", "ClearAllForwardings=yes", "-T", "-p", "60022", "127.0.0.1", "--", probe)
++	if !slices.Equal(cmd.Args[1:], want) {
++		t.Fatalf("probe arguments: got %q, want %q", cmd.Args[1:], want)
++	}
++	if !slices.Equal(configured, agent.sshConfig.Args()) {
++		t.Fatal("resource probe changed the SSH configuration used by other host-agent tasks")
++	}
++}

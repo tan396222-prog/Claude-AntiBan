@@ -31,6 +31,13 @@ if [[ "$actual_version" != "$version" ]]; then echo 'App version differs from VE
 codesign --verify --deep --strict --verbose=2 "$bundle"
 xcrun stapler validate "$bundle"
 spctl --assess --type execute --verbose=2 "$bundle"
+guest_source="cage-macos-guest-$version-source.tar.gz"
+guest_materials="$bundle/Contents/Resources/guest-os/sources/$guest_source"
+node scripts/guest-os/collect-macos-sshfs-sources.mjs verify "$guest_materials" \
+  "$bundle/Contents/Resources/guest-os/project/cage-sshfs" "$version"
+# Copy only the source frozen by this App build, including the final signed
+# helper hash. Packaging must not substitute newer Homebrew source material.
+cp "$guest_materials" "$release/$guest_source"
 
 stage="$(mktemp -d "$PWD/_output/dmg-stage.XXXXXX")"
 trap 'rm -rf "$stage"' EXIT
@@ -40,18 +47,19 @@ cat > "$stage/安装说明 - Read Me.txt" <<'EOF'
 Cage — 本机隔离编码工作区
 
 1. 将 Cage.app 拖入 Applications（应用程序）。
-2. 从应用程序打开 Cage；首次启动在“网络与代理”添加自己的 Clash/Mihomo YAML 订阅或配置。
-3. 选择节点，启动 Cage 环境。首次需要下载 Linux 镜像和工具，请保持网络连接。
+2. 从应用程序打开 Cage，设置本地账户，并按首次引导选择客机系统、存储位置和代理。
+3. 添加自己的 Clash/Mihomo YAML 订阅或配置并选择节点，创建和启动环境。首次需下载系统镜像和工具，请保持网络连接。
 4. 打开项目或新建终端，输入 claude，并在 Cage 浏览器内登录自己的 Claude 账户。
 
 需要 Apple Silicon Mac、macOS 14 或更新版本。无需安装 Go、Node.js 或 Clash。
-代理服务与 Claude 账户需自行准备。此版本为 Alpha。
+代理服务与 Claude 账户需自行准备。具体版本与发布状态以发行说明为准。
 共享项目中的文件修改会直接写回 Mac；请备份重要项目。
 升级前请退出 Cage 并停止环境，再替换应用程序；配置与项目文件会保留。
 
 Drag Cage.app into Applications, then open it from Applications.
-Add your own Clash/Mihomo YAML subscription or configuration, select a node,
-and start the environment. Initial setup downloads Linux and developer tools.
+Complete the local account and environment setup, add your own Clash/Mihomo
+YAML subscription or configuration, select a node, and start the environment.
+Initial setup downloads the selected guest system and developer tools.
 Requires Apple Silicon and macOS 14+. Your own proxy and Claude account are required.
 
 入门 / Getting started:
@@ -77,6 +85,6 @@ curl --fail --location --retry 2 --connect-timeout 15 --max-time 180 \
   -o "$release/$core_source.part"
 mv "$release/$core_source.part" "$release/$core_source"
 tar -tzf "$release/$core_source" > /dev/null
-(cd "$release" && shasum -a 256 "$artifact" "$core_source" > SHA256SUMS)
+(cd "$release" && shasum -a 256 "$artifact" "$core_source" "$guest_source" > SHA256SUMS)
 node scripts/cleanup-apps.mjs --keep "$bundle" --root "$PWD/_output"
-printf 'Verified release artifacts:\n%s/%s\n%s/%s\n%s/SHA256SUMS\n' "$release" "$artifact" "$release" "$core_source" "$release"
+printf 'Verified release artifacts:\n%s/%s\n%s/%s\n%s/%s\n%s/SHA256SUMS\n' "$release" "$artifact" "$release" "$core_source" "$release" "$guest_source" "$release"

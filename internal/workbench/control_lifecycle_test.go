@@ -115,6 +115,15 @@ func TestDesktopRejectsUnknownAndDifferentBuildsWithoutStoppingThem(t *testing.T
 	for _, kind := range []string{"same", "same-version-other-build", "legacy"} {
 		t.Run(kind, func(t *testing.T) {
 			profile := t.TempDir()
+			lock, err := openControllerLock(profile, os.O_CREATE|os.O_RDWR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err := lockController(lock); err != nil {
+				t.Fatal(err)
+			}
+			defer unlockController(lock)
 			identity := current
 			if kind == "same-version-other-build" {
 				identity.Build = "different-build"
@@ -183,5 +192,73 @@ func TestPrepareUpdateDoesNotAcceptUnresponsiveLockedController(t *testing.T) {
 	defer unlockController(f)
 	if _, err := PrepareUpdate(filepath.Join(profile, "config.json"), false); err == nil {
 		t.Fatal("locked offline service accepted as safe to replace")
+	}
+}
+
+func TestPrepareUpdateWaitsForRoutineProbeAndPreservesActiveWork(t *testing.T) {
+	for _, activeJob := range []bool{false, true} {
+		t.Run(strconv.FormatBool(activeJob), func(t *testing.T) {
+			s := testServer(t)
+			var err error
+			s.identity, err = currentController()
+			if err != nil {
+				t.Fatal(err)
+			}
+			lock, err := openControllerLock(s.profile, os.O_CREATE|os.O_RDWR)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lock.Close()
+			if err := lockController(lock); err != nil {
+				t.Fatal(err)
+			}
+			defer unlockController(lock)
+			var stopped atomic.Bool
+			shutdownDone := make(chan struct{})
+			s.shutdown = func() {
+				stopped.Store(true)
+				_ = unlockController(lock)
+				close(shutdownDone)
+			}
+			server := httptest.NewServer(s.handler())
+			defer server.Close()
+			_, portString, _ := net.SplitHostPort(server.Listener.Addr().String())
+			port, _ := strconv.Atoi(portString)
+			s.origin = "http://localhost:" + portString
+			if err := writePrivate(filepath.Join(s.profile, "control.json"), controlFile{Port: port, Token: s.token, PID: os.Getpid(), Controller: s.identity}); err != nil {
+				t.Fatal(err)
+			}
+			if activeJob {
+				s.setJobForTest(Job{ID: "active", Running: true})
+			}
+			// The first handoff reaches a real occupied operation lock. A
+			// routine probe releases it without creating a user job or VM.
+			s.op.Lock()
+			released := make(chan struct{})
+			go func() {
+				time.Sleep(100 * time.Millisecond)
+				s.op.Unlock()
+				close(released)
+			}()
+			result, err := PrepareUpdate(s.configPath, false)
+			<-released
+			if result.Status == "prepared" {
+				select {
+				case <-shutdownDone:
+				case <-time.After(time.Second):
+					t.Fatal("prepared update did not finish shutting down")
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if activeJob {
+				if result.Status != "stop_required" || stopped.Load() {
+					t.Fatalf("active work was not preserved: %+v stopped=%v", result, stopped.Load())
+				}
+			} else if result.Status != "prepared" || !stopped.Load() {
+				t.Fatalf("routine probe prevented idle update: %+v stopped=%v", result, stopped.Load())
+			}
+		})
 	}
 }

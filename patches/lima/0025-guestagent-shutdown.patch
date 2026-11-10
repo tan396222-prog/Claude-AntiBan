@@ -1,0 +1,221 @@
+--- a/cmd/lima-guestagent/lima-guestagent.TEMPLATE.service
++++ b/cmd/lima-guestagent/lima-guestagent.TEMPLATE.service
+@@ -5,6 +5,8 @@
+ ExecStart={{.Binary}} daemon {{.Args}} --runtime-dir="%t/%N"
+ Type=simple
+ Restart=on-failure
++# Bound replacement of older guest agents with non-cancellable serial reads.
++TimeoutStopSec=5s
+ OOMPolicy=continue
+ OOMScoreAdjust=-500
+ 
+--- a/pkg/guestagent/api/server/server.go
++++ b/pkg/guestagent/api/server/server.go
+@@ -32,9 +32,9 @@
+ 	go func() {
+ 		<-ctx.Done()
+ 		logrus.Debug("Stopping the gRPC server")
+-		server.GracefulStop()
+-		logrus.Debug("Closing the listener used by the gRPC server")
+-		lis.Close()
++		// Event and tunnel streams last for the lifetime of the guest. Cancel
++		// their transports when that lifetime ends so they cannot hold shutdown.
++		server.Stop()
+ 	}()
+ 	err := server.Serve(lis)
+ 	// grpc.Server.Serve() expects to return a non-nil error caused by lis.Accept()
+--- /dev/null
++++ b/pkg/guestagent/api/server/server_test.go
+@@ -0,0 +1,63 @@
++package server
++
++import (
++	"context"
++	"net"
++	"testing"
++	"time"
++
++	"github.com/lima-vm/lima/v2/pkg/guestagent"
++	"github.com/lima-vm/lima/v2/pkg/guestagent/api"
++	"google.golang.org/grpc"
++	"google.golang.org/grpc/credentials/insecure"
++	"google.golang.org/protobuf/types/known/emptypb"
++)
++
++type streamingAgent struct{ guestagent.Agent }
++
++func (*streamingAgent) Events(ctx context.Context, responses chan *api.Event) {
++	defer close(responses)
++	select {
++	case responses <- &api.Event{}:
++	case <-ctx.Done():
++		return
++	}
++	<-ctx.Done()
++}
++
++func TestShutdownCancelsActiveStream(t *testing.T) {
++	listener, err := net.Listen("tcp", "127.0.0.1:0")
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithCancel(context.Background())
++	defer cancel()
++	finished := make(chan error, 1)
++	go func() { finished <- StartServer(ctx, listener, &GuestServer{Agent: &streamingAgent{}}) }()
++	client, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer client.Close()
++	streamCtx, stopStream := context.WithTimeout(context.Background(), 5*time.Second)
++	defer stopStream()
++	stream, err := api.NewGuestServiceClient(client).GetEvents(streamCtx, &emptypb.Empty{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err := stream.Recv(); err != nil {
++		t.Fatal(err)
++	}
++	cancel()
++	select {
++	case err := <-finished:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("guest server waited for a live stream after shutdown")
++	}
++	if _, err := stream.Recv(); err == nil {
++		t.Fatal("stream survived server shutdown")
++	}
++}
+--- a/pkg/guestagent/serialport/seriallistener_linux.go
++++ b/pkg/guestagent/serialport/seriallistener_linux.go
+@@ -20,7 +20,7 @@
+ func Listen(serialDevice string) (net.Listener, error) {
+ 	c, err := DialSerial(serialDevice)
+ 	if err != nil {
+-		return nil, &net.OpError{Op: "dial", Net: "virtio", Source: c.LocalAddr(), Addr: nil, Err: err}
++		return nil, &net.OpError{Op: "dial", Net: "virtio", Source: nil, Addr: nil, Err: err}
+ 	}
+ 
+ 	return netutil.LimitListener(&SerialListener{conn: c}, 1), nil
+@@ -45,19 +45,18 @@
+ 	ln.mu.Lock()
+ 	defer ln.mu.Unlock()
+ 
+-	if !ln.ok() {
+-		return syscall.EINVAL
+-	}
+-
+ 	if ln.closed {
+ 		return nil
+ 	}
+ 	ln.closed = true
+ 
+-	return nil
++	// Connections reuse this port, so the listener owns its final close.
++	return ln.conn.port.Close()
+ }
+ 
+ func (ln *SerialListener) Addr() net.Addr {
++	ln.mu.Lock()
++	defer ln.mu.Unlock()
+ 	if ln.ok() {
+ 		return ln.conn.LocalAddr()
+ 	}
+--- /dev/null
++++ b/pkg/guestagent/serialport/seriallistener_linux_test.go
+@@ -0,0 +1,69 @@
++package serialport
++
++import (
++	"fmt"
++	"net"
++	"os"
++	"testing"
++	"time"
++
++	"golang.org/x/sys/unix"
++)
++
++func TestListenerCloseInterruptsSerialRead(t *testing.T) {
++	master, err := os.OpenFile("/dev/ptmx", os.O_RDWR|unix.O_NOCTTY, 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer master.Close()
++	if err := unix.IoctlSetPointerInt(int(master.Fd()), unix.TIOCSPTLCK, 0); err != nil {
++		t.Fatal(err)
++	}
++	number, err := unix.IoctlGetInt(int(master.Fd()), unix.TIOCGPTN)
++	if err != nil {
++		t.Fatal(err)
++	}
++	listener, err := Listen(fmt.Sprintf("/dev/pts/%d", number))
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer listener.Close()
++	conn, err := listener.Accept()
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Closing a logical connection must keep the reusable device alive.
++	if err := conn.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := conn.Write([]byte("x")); err != nil {
++		t.Fatal(err)
++	}
++	reading := make(chan struct{})
++	finished := make(chan error, 1)
++	go func() {
++		close(reading)
++		_, err := conn.Read(make([]byte, 1))
++		finished <- err
++	}()
++	<-reading
++	if err := listener.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err := listener.Close(); err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case err := <-finished:
++		if err == nil {
++			t.Fatal("closed port returned a successful read")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("listener close left a blocked serial read")
++	}
++	if _, err := listener.Accept(); err == nil {
++		t.Fatal("closed listener accepted a connection")
++	}
++}
++
++var _ net.Listener = (*SerialListener)(nil)
+--- a/pkg/guestagent/serialport/serialport_linux.go
++++ b/pkg/guestagent/serialport/serialport_linux.go
+@@ -15,17 +15,8 @@
+ 		return nil, err
+ 	}
+ 
+-	defer func() {
+-		if err != nil && f != nil {
+-			f.Close()
+-		}
+-	}()
+-
+-	fd := f.Fd()
+-	if err = unix.SetNonblock(int(fd), false); err != nil {
+-		return nil, err
+-	}
+-
++	// Keep the descriptor nonblocking for Go's poller. Closing the listener
++	// must interrupt a read even when the host has stopped sending data.
+ 	return &Port{f: f}, nil
+ }
+ 

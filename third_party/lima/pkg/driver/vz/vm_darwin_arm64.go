@@ -65,11 +65,24 @@ func newMacPlatformConfiguration(inst *limatype.Instance) (vz.PlatformConfigurat
 		if err != nil {
 			return nil, err
 		}
-		ipswMostFeatureFul := ipswImage.MostFeaturefulSupportedConfiguration()
-		hwModelData = ipswMostFeatureFul.HardwareModel().DataRepresentation()
+		if ipswImage == nil {
+			return nil, fmt.Errorf("missing restore image for %q", ipsw)
+		}
+		requirements := ipswImage.MostFeaturefulSupportedConfiguration()
+		if requirements == nil || requirements.MinimumSupportedCPUCount() == 0 {
+			return nil, fmt.Errorf("IPSW %q has no configuration supported by this Mac", ipsw)
+		}
+		model := requirements.HardwareModel()
+		if model == nil || !model.Supported() || len(model.DataRepresentation()) == 0 {
+			return nil, fmt.Errorf("IPSW %q has no supported hardware model", ipsw)
+		}
+		hwModelData = model.DataRepresentation()
 		if err = os.WriteFile(hwModelFile, hwModelData, 0o666); err != nil {
 			return nil, err
 		}
+	}
+	if len(hwModelData) == 0 {
+		return nil, fmt.Errorf("empty macOS hardware model in %q", hwModelFile)
 	}
 	hwModel, err := vz.NewMacHardwareModelWithData(hwModelData)
 	if err != nil {

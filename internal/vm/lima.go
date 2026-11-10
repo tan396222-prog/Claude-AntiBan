@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"al.essio.dev/pkg/shellescape"
 	"github.com/coreos/go-semver/semver"
@@ -243,6 +244,9 @@ func fromLima(inst *limatype.Instance) *Instance {
 // exprs are the yq expressions of s, as limactl's edit flags make them.
 func exprs(s Settings) ([]string, error) {
 	var e []string
+	if s.macOSTimezone != "" {
+		e = append(e, ".timezone = "+strconv.Quote(s.macOSTimezone))
+	}
 	if s.CPUs > 0 {
 		e = append(e, fmt.Sprintf(".cpus = %d", s.CPUs))
 	}
@@ -326,10 +330,15 @@ func (l *Lima) Create(ctx context.Context, name, template string, s Settings, lo
 				e = append(e, ".images = "+string(images))
 				// cloud-init rewrites Debian's mirror list after bootcmd.
 				// Configure it immediately before Lima installs dependencies.
-				e = append(e, `.provision += [{"mode": "dependency", "script": `+strconv.Quote(cage.DebianMirrorsScript)+`}]`)
+				e = append(e, `.provision += [{"mode": "dependency", "script": `+strconv.Quote(cage.DebianPrepareScript)+`}]`)
 			}
 			tz, _ := json.Marshal(cfg.Timezone)
-			e = append(e, ".propagateProxyEnv = false", `.env = {"http_proxy":"","https_proxy":"","ftp_proxy":"","no_proxy":"","HTTP_PROXY":"","HTTPS_PROXY":"","FTP_PROXY":"","NO_PROXY":"","ALL_PROXY":"","all_proxy":""}`, ".timezone = "+string(tz), ".user.name = \"cage\"", ".user.home = \"/home/cage\"", ".user.uid = 1000")
+			e = append(e, ".propagateProxyEnv = false", `.env = {"http_proxy":"","https_proxy":"","ftp_proxy":"","no_proxy":"","HTTP_PROXY":"","HTTPS_PROXY":"","FTP_PROXY":"","NO_PROXY":"","ALL_PROXY":"","all_proxy":""}`, ".timezone = "+string(tz))
+			if tmpl.Config.OS != nil && *tmpl.Config.OS == limatype.DARWIN {
+				e = append(e, `.user.name = "cageprovision"`, `.user.home = "/Users/cageprovision"`, `.user.comment = "Cage Provisioning"`, ".user.uid = 501", `.video.display = "offscreen"`)
+			} else {
+				e = append(e, `.user.name = "cage"`, `.user.home = "/home/cage"`, ".user.uid = 1000")
+			}
 		}
 		if len(e) > 0 {
 			if tmpl.Bytes, err = yqutil.EvaluateExpression(ctx, yqutil.Join(e), tmpl.Bytes); err != nil {
@@ -351,7 +360,7 @@ func cageDebianImages(images []limatype.Image) ([]byte, error) {
 		if !ok || img.Variant != "genericcloud" || img.Digest.Validate() != nil || img.Digest.Algorithm() != "sha512" {
 			continue
 		}
-		for _, base := range []string{"https://mirrors.nju.edu.cn/debian-cdimage/cloud/", "https://mirrors.ustc.edu.cn/debian-cdimage/cloud/", upstream} {
+		for _, base := range []string{upstream, "https://mirrors.nju.edu.cn/debian-cdimage/cloud/", "https://mirrors.ustc.edu.cn/debian-cdimage/cloud/"} {
 			candidate := img
 			candidate.Location = base + suffix
 			candidates = append(candidates, candidate)
@@ -515,8 +524,30 @@ func (l *Lima) Start(ctx context.Context, name string, log io.Writer) error {
 	// Here, so that VMs made before it get it too; nothing is written when
 	// it is there already.
 	settings := Settings{noEphemeralPorts: true}
-	if os.Getenv(cage.ConfigEnv) != "" {
-		settings.MemoryGiB, settings.CPUs = cage.ResourceLimits()
+	if configPath := os.Getenv(cage.ConfigEnv); configPath != "" {
+		allocation, loadErr := cage.LoadResourceAllocation(configPath)
+		if loadErr != nil {
+			return loadErr
+		}
+		settings.MemoryGiB, settings.CPUs, err = allocation.Limits()
+		if *inst.Config.OS == limatype.DARWIN && err == nil {
+			cfg, loadErr := cage.Load(configPath)
+			if loadErr != nil {
+				return loadErr
+			}
+			settings.macOSTimezone = cfg.Timezone
+			requirements, requirementErr := ReadMacOSResourceRequirements(inst.Dir)
+			if requirementErr != nil {
+				return requirementErr
+			}
+			settings.MemoryGiB, settings.CPUs, err = requirements.Limits(allocation)
+			if err == nil {
+				err = saveMacOSResourceRequirements(inst.Dir, requirements)
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if err := l.Edit(ctx, name, settings); err != nil {
 		return err
@@ -530,11 +561,21 @@ func (l *Lima) Start(ctx context.Context, name string, log io.Writer) error {
 	if err := NetworkConfined(inst.Config); err != nil {
 		return err
 	}
+	var guestAgent string
+	// Lima always needs the Darwin helper for first boot. Windows and FreeBSD
+	// have no guest agent, and Linux plain mode works without one.
+	if *inst.Config.OS == limatype.DARWIN || (*inst.Config.OS == limatype.LINUX && !*inst.Config.Plain) {
+		guestAgent, err = share.GuestAgent(*inst.Config.OS, *inst.Config.Arch)
+		if err != nil {
+			return err
+		}
+	}
 	return withLog(log, func() error {
 		if err := reconcile.Reconcile(ctx, name); err != nil {
 			return err
 		}
-		return instance.StartWithPaths(ctx, inst, false, false, "", share.GuestAgent)
+		started := time.Now()
+		return vmStartError(instance.StartWithPaths(ctx, inst, false, false, "", guestAgent), inst.Dir, started)
 	})
 }
 

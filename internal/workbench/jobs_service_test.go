@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,7 +52,7 @@ func TestLogoutJoinsRunningStopAndLocksOnlyAfterSuccess(t *testing.T) {
 			state := awaitJobIdle(t, &s.jobs)
 			view := s.account.view()
 			if fail {
-				if !view.Unlocked || view.RequireAuthentication || state.Error != "could not stop environment" {
+				if !view.Unlocked || view.RequireAuthentication || !strings.Contains(state.Error, "停止环境失败") {
 					t.Fatalf("failed stop changed account access: %+v, job %+v", view, state)
 				}
 				return

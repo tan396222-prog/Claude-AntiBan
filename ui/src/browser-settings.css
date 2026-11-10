@@ -1,0 +1,88 @@
+.browser-settings-menu-row { margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--line); }
+.browser-settings-page { position: absolute; inset: 0; display: flex; flex-direction: column; overflow: auto; background: var(--paper); color: var(--strong); font-size: 1rem; }
+.browser-settings-top { display: flex; flex: none; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 24px 28px 20px; border-bottom: 1px solid var(--line); }
+.browser-settings-top h1 { font-size: 1.7rem; margin: 0; letter-spacing: -.025em; }
+.browser-settings-search { display: flex; align-items: center; gap: 8px; width: min(330px, 100%); border: 1px solid var(--line); border-radius: 6px; padding: 0 10px; color: var(--muted); background: var(--paper); }
+.browser-settings-search input { width: 100%; min-width: 0; border: 0; background: transparent; padding: 9px 0; color: var(--strong); font: inherit; outline-offset: 3px; }
+.browser-settings-layout { display: flex; align-items: flex-start; min-height: 0; flex: 1; }
+.browser-settings-nav { width: 190px; flex: none; display: grid; gap: 3px; padding: 18px 10px; position: sticky; top: 0; }
+.browser-settings-nav button { display: flex; align-items: center; gap: 10px; padding: 11px 12px; border: 0; background: transparent; text-align: left; color: var(--muted); border-radius: 6px; font: inherit; transition: background 120ms, color 120ms; }
+.browser-settings-nav button svg { flex: none; }
+.browser-settings-nav button[aria-current="page"] { background: var(--selected); color: var(--strong); font-weight: 600; }
+.browser-settings-nav button:hover { background: var(--hover); color: var(--strong); }
+.settings-unsaved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--focus); margin-left: auto; }
+.browser-settings-content { min-width: 0; width: min(100%, 820px); padding: 28px 32px 48px; }
+.browser-settings-section { min-width: 0; margin-bottom: 36px; animation: browser-settings-enter 140ms ease-out; }
+.browser-settings-section h2 { font-size: 1.5rem; font-weight: 600; margin: 0 0 12px; letter-spacing: -.025em; }
+.browser-settings-section h3 { font-size: 1rem; margin: 0; font-weight: 600; }
+.browser-settings-section p { margin: 9px 0 16px; color: var(--muted); line-height: 1.65; overflow-wrap: anywhere; }
+.browser-setting-form { margin-top: 28px; display: grid; gap: 12px; }
+.browser-setting-field { display: grid; gap: 10px; min-width: 0; font-weight: 600; }
+.browser-setting-field input, .browser-setting-field .inline-select { width: 100%; min-width: 0; font-weight: 400; }
+.browser-setting-field input { padding: 10px 12px; font: inherit; background: var(--paper); color: var(--strong); border: 1px solid var(--line); border-radius: 6px; }
+.browser-setting-actions, .browser-settings-links, .extension-import-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.browser-setting-actions button, .browser-settings-links button, .extension-import-actions button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 9px 12px; min-height: 36px; font-size: inherit; }
+.browser-setting-actions [role="status"] { color: var(--muted); }
+.browser-setting-row { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 16px; padding: 22px 0; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.browser-setting-row > div { flex: 1 1 170px; }
+.browser-setting-row > .inline-select { flex: 0 1 170px; min-width: 140px; }
+.browser-setting-row p { margin-bottom: 0; }
+.browser-settings-error { color: var(--danger, #b42318) !important; }
+.browser-settings-links { border-top: 1px solid var(--line); padding-top: 18px; margin-top: 28px; }
+.browser-settings-links button { color: var(--strong); }
+.browser-settings-no-results { padding: 28px 0; }
+.browser-setting-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 20px 0 12px; }
+.browser-setting-heading > div { min-width: 0; overflow-wrap: anywhere; }
+.browser-settings-section .browser-cookies { margin: 0; font-size: 1rem; border: 0; border-radius: 0; padding: 0; }
+.browser-settings-section .cookie-list { max-height: 300px; }
+.browser-settings-section .cookie-toolbar { gap: 8px; }
+.extension-item, .extension-install-preview, .extension-import { border: 1px solid var(--line); border-radius: 8px; padding: 18px; margin-top: 16px; min-width: 0; }
+.extension-item .browser-setting-heading { margin-top: 0; flex-wrap: wrap; }
+.extension-version { display: inline-block; margin-left: 9px; color: var(--muted); font-size: .92rem; }
+.extension-enable { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); white-space: nowrap; }
+.extension-enable input, .extension-import-row input { accent-color: var(--focus); width: 16px; height: 16px; flex: none; }
+.extension-permissions { margin: 12px 0; color: var(--muted); }
+.extension-permissions summary { cursor: pointer; color: var(--strong); padding: 4px 0; }
+.extension-permissions ul { margin: 8px 0; padding-left: 22px; max-height: 180px; overflow: auto; overflow-wrap: anywhere; line-height: 1.6; }
+.extension-item-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.extension-item-footer > span { font-size: .85rem; color: var(--muted); overflow-wrap: anywhere; }
+.extension-empty { display: grid; justify-items: start; gap: 12px; padding: 24px 0 12px; color: var(--muted); }
+.extension-empty strong { color: var(--strong); font-size: 1.15rem; }
+.extension-empty p { margin: 0; }
+.extension-import .browser-setting-heading { margin-top: 0; }
+.extension-import-actions { justify-content: space-between; margin: 18px 0; }
+.extension-import-row { border-top: 1px solid var(--line); padding-top: 16px; margin-top: 16px; }
+.extension-import-row > label { display: flex; align-items: flex-start; flex-wrap: wrap; gap: 8px; overflow-wrap: anywhere; }
+.extension-import-row > label > span { color: var(--muted); }
+.extension-import-row p { margin-bottom: 8px; }
+@keyframes browser-settings-enter { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 1000px) {
+ .browser-settings-top { padding: 20px; }
+ .browser-settings-nav { width: 156px; padding: 16px 8px; }
+ .browser-settings-nav button { padding: 10px 8px; gap: 7px; }
+ .browser-settings-content { padding: 24px 20px 36px; }
+}
+@media (prefers-reduced-motion: reduce) {
+ .browser-settings-section { animation: none; }
+ .browser-settings-nav button { transition: none; }
+}
+/* Browser settings also fit beside Cage's sidebar and vertical browser tabs. */
+.browser-lane { container: cage-browser / inline-size; }
+.browser-settings-nav button { justify-content: flex-start; white-space: normal; }
+@container cage-browser (max-width: 760px) {
+ .browser-settings-layout { display: block; }
+ .browser-settings-nav { width: 100%; display: flex; flex-wrap: wrap; gap: 4px; padding: 12px 16px; position: static; border-bottom: 1px solid var(--line); }
+ .browser-settings-nav button { padding: 8px 10px; max-width: 100%; }
+ .browser-settings-content { width: 100%; padding: 22px 20px 36px; }
+ .browser-settings-top { padding: 18px 20px; }
+ .browser-settings-search { min-width: 0; }
+}
+.browser-settings-compact-nav { display: none; }
+@container cage-browser (max-width: 450px) {
+ .browser-settings-nav { display: none; }
+ .browser-settings-compact-nav { display: block; padding: 12px 20px; border-bottom: 1px solid var(--line); }
+ .browser-settings-compact-nav > .inline-select { width: 100%; }
+ .browser-settings-top { padding: 12px 20px; gap: 12px; }
+ .browser-settings-top h1 { font-size: 1.35rem; }
+ .browser-settings-content { padding-top: 18px; }
+}

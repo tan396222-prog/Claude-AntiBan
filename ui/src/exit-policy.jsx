@@ -4,7 +4,7 @@ import { Globe2, LoaderCircle } from "lucide-react";
 import { canonicalExitPolicy } from "./safety-state.mjs";
 
 const countries =
-  "US GB CA DE FR NL SE FI IE CH AU NZ JP SG KR HK TW CN IN BR".split(" ");
+  "US GB CA DE FR NL SE FI IE CH AU NZ JP SG KR HK MO TW IN BR".split(" ");
 const names = new Intl.DisplayNames(["zh-CN"], { type: "region" });
 
 export function ExitPolicyFields({
@@ -24,10 +24,10 @@ export function ExitPolicyFields({
         : {
             ...policy,
             country_code: observation.country_code || "",
-            ...(policy.scope === "city"
+            ...(policy.scope === "city" || policy.scope === "region"
               ? {
                   region: observation.region || "",
-                  city: observation.city || "",
+                  ...(policy.scope === "city" ? { city: observation.city || "" } : {}),
                 }
               : {}),
           },
@@ -36,7 +36,7 @@ export function ExitPolicyFields({
     <>
       <div className="section-title">
         <h3>IP 变化规则</h3>
-        <p>按保存的规则判断出口变化，允许范围内的动态 IP 可以继续使用。</p>
+        <p>中国大陆出口禁止放行；静态 IP 和不限地区也必须确认出口国家。</p>
       </div>
       <label className="toggle-row">
         <span>
@@ -72,8 +72,9 @@ export function ExitPolicyFields({
               onValueChange={(next) => update("scope", next)}
             >
               <option value="city">同一城市</option>
+              <option value="region">同一州／省</option>
               <option value="country">同一国家／地区</option>
-              <option value="any">不限地区</option>
+              <option value="any">不限地区（中国大陆除外）</option>
             </InlineSelect>
           </label>
           {policy.scope !== "any" && (
@@ -97,7 +98,7 @@ export function ExitPolicyFields({
                   ))}
                 </InlineSelect>
               </label>
-              {policy.scope === "city" && (
+              {(policy.scope === "city" || policy.scope === "region") && (
                 <div className="field-row">
                   <label>
                     所属州／省
@@ -107,20 +108,24 @@ export function ExitPolicyFields({
                       placeholder="例如 California"
                     />
                   </label>
-                  <label>
-                    允许的城市
-                    <input
-                      value={policy.city}
-                      onChange={(e) => update("city", e.target.value)}
-                      placeholder="例如 Los Angeles"
-                    />
-                  </label>
+                  {policy.scope === "city" && (
+                    <label>
+                      允许的城市
+                      <input
+                        value={policy.city}
+                        onChange={(e) => update("city", e.target.value)}
+                        placeholder="例如 Los Angeles"
+                      />
+                    </label>
+                  )}
                 </div>
               )}
               <p className="field-help">
                 {policy.scope === "city"
                   ? "城市同时匹配所属国家和州／省。名称以定位结果为准，建议使用检测结果填写。"
-                  : "建议先检测出口，再使用检测到的国家／地区填写。"}
+                  : policy.scope === "region"
+                    ? "州／省同时匹配所属国家，包括日本的都道府县。名称以检测结果为准。"
+                    : "建议先检测出口，再使用检测到的国家／地区填写。"}
               </p>
             </>
           )}
@@ -159,7 +164,7 @@ export function ExitPolicyFields({
         </div>
       )}
       <p className="footnote">
-        已有绑定会保留，重检和重启不会自动更换基准。超出范围或无法确认受限地区时暂停外网，离线终端和文件仍可使用。
+        已有绑定会保留，重检和重启不会自动更换基准。命中大陆网段、定位为中国大陆、无法确认出口地区或超出保存范围时暂停外网，离线终端和文件仍可使用。
       </p>
       <p className="field-help">
         范围依据 IP 数据库的近似定位。后台约每 30

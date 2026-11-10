@@ -14,12 +14,16 @@ import (
 	"time"
 
 	"github.com/sylvinus/agent-vm/internal/cage"
+	"github.com/sylvinus/agent-vm/internal/exitpolicy"
 	"github.com/sylvinus/agent-vm/internal/host"
+	"github.com/sylvinus/agent-vm/internal/mobilelink"
 	"github.com/sylvinus/agent-vm/internal/mounts"
 	"github.com/sylvinus/agent-vm/internal/paths"
 )
 
 type Preferences struct {
+	BalancedDisplay       bool   `json:"balanced_display"`
+	MobileRelay           string `json:"mobile_relay,omitempty"`
 	Workspace             string `json:"workspace"`
 	BrowserHomeURL        string `json:"browser_home_url"`
 	ClaudeTerminalCommand string `json:"claude_terminal_command"`
@@ -50,6 +54,13 @@ func environmentWorkspace(profile string) string { return cage.EnvironmentDir(pr
 func guestPath(path string) string { return paths.Guest(paths.Host(path)) }
 
 func (s *Server) prepareEnvironment() error {
+	record, err := cage.LoadEnvironmentRecord(s.profile)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	p := s.preferences
+	s.mu.Unlock()
 	path := environmentWorkspace(s.profile)
 	// Promote an existing installation's VM once, preserving its disk and login state.
 	if _, err := os.Stat(filepath.Join(s.profile, "environment.json")); os.IsNotExist(err) {
@@ -63,17 +74,33 @@ func (s *Server) prepareEnvironment() error {
 	if err := os.MkdirAll(path, 0700); err != nil {
 		return err
 	}
-	path, err := validateWorkspace(path, s.profile)
+	previous := path
+	path, err = validateWorkspace(path, s.profile)
 	if err != nil {
+		// Older independent profiles generated their default workspace inside
+		// the default profile. Keep its files and VM identity while selecting a
+		// shareable workspace through the same admission used for every project.
+		path, err = validateWorkspace(p.Workspace, s.profile)
+		if p.Workspace == "" || err != nil {
+			path = cage.DefaultEnvironmentDir(s.profile)
+			if err = os.MkdirAll(path, 0700); err != nil {
+				return err
+			}
+			path, err = validateWorkspace(path, s.profile)
+			if err != nil {
+				return err
+			}
+		}
+		if record.IdentityDirectory == "" {
+			record.IdentityDirectory = previous
+		}
+	}
+	record.Directory = path
+	if err = writePrivate(filepath.Join(s.profile, "environment.json"), record); err != nil {
 		return err
 	}
-	if err = writePrivate(filepath.Join(s.profile, "environment.json"), map[string]string{"directory": path}); err != nil {
-		return err
-	}
-	s.mu.Lock()
-	p := s.preferences
-	s.mu.Unlock()
-	if p.Workspace == "" {
+	if p.Workspace == "" || paths.Equal(paths.Host(p.Workspace), paths.Host(previous)) ||
+		record.IdentityDirectory != "" && paths.Equal(paths.Host(p.Workspace), paths.Host(record.IdentityDirectory)) {
 		p.Workspace = path
 	}
 	if err := writePrivate(filepath.Join(s.profile, "workbench.json"), p); err != nil {
@@ -139,6 +166,9 @@ func writePrivate(path string, v any) error {
 	return os.Rename(f.Name(), path)
 }
 func settingsView(c cage.Config, p Preferences) Settings {
+	if p.MobileRelay == mobilelink.OfficialRelay {
+		p.MobileRelay = ""
+	}
 	p.BrowserHomeURL = browserHomeURL(p)
 	p.ClaudeTerminalCommand = claudeTerminalCommand(p)
 	return Settings{Preferences: p, DNSURL: c.DNSURL, Timezone: c.Timezone, Locale: c.Locale, BrowserLanguage: c.BrowserLanguage, ExitPolicy: c.ExitPolicy.Normalized()}
@@ -155,6 +185,10 @@ func proposedSettings(input Settings, old cage.Config, profile string) (cage.Con
 		return c, input.Preferences, errors.New("请选择 Mac 或原生 Linux 按键习惯")
 	}
 	p := input.Preferences
+	p.MobileRelay = strings.TrimSuffix(strings.TrimSpace(p.MobileRelay), "/")
+	if p.MobileRelay != "" && (!strings.HasPrefix(p.MobileRelay, "https://") || !mobilelink.ValidRelayOrigin(p.MobileRelay)) {
+		return c, p, errors.New("中继地址须为 HTTPS 地址，只包含主机和可选端口")
+	}
 	if len(p.ClaudeTerminalCommand) > 4096 || strings.ContainsAny(p.ClaudeTerminalCommand, "\x00\r\n") {
 		return c, p, errors.New("Claude 终端命令必须为一行，且不超过 4096 字节")
 	}
@@ -213,6 +247,9 @@ func validateWorkspace(path, profile string) (string, error) {
 			return "", errors.New("Cage 配置、环境存储、迁移备份及其上级目录不能共享给虚拟机")
 		}
 	}
+	if err := validateHostProjectData(abs, profile); err != nil {
+		return "", err
+	}
 	return abs, nil
 }
 
@@ -223,25 +260,24 @@ func probeLocation(ctx context.Context, c cage.Config) (Location, error) {
 	if err != nil {
 		return Location{}, err
 	}
+	if state, message := exitpolicy.CheckExitCountry(ip, nil); state == cage.CheckFailed {
+		return Location{IP: ip, CheckedAt: time.Now()}, errors.New(message)
+	}
 	loc, err := probeLocationForIP(ctx, c, ip)
 	if err != nil {
 		return Location{IP: ip, CheckedAt: time.Now()}, err
 	}
+	observed := loc.exitLocation()
+	if state, message := exitpolicy.CheckExitCountry(ip, &observed); state != cage.CheckPassed {
+		return loc, errors.New(message)
+	}
 	return loc, nil
 }
 
-// Manual timezone/language and an IP-only exit rule need no geolocation.
-// The proxy's exit IP is still measured and checked against the saved rule.
-func probeEnvironmentLocation(ctx context.Context, c cage.Config, p Preferences) (Location, error) {
-	policy := c.ExitPolicy.Normalized()
-	if p.AutoTimezone || p.AutoLanguage || (policy.Mode != "static" && policy.Scope != "any") {
-		return probeLocation(ctx, c)
-	}
-	ip, err := cage.ProbeExitIP(ctx, c)
-	if err != nil {
-		return Location{}, err
-	}
-	return Location{IP: ip, CheckedAt: time.Now()}, nil
+// All exit modes need country evidence. Manual locale settings only control
+// whether the observed timezone/language is applied to the environment.
+func probeEnvironmentLocation(ctx context.Context, c cage.Config, _ Preferences) (Location, error) {
+	return probeLocation(ctx, c)
 }
 
 func (l Location) exitLocation() cage.ExitLocation {

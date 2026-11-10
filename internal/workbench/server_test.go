@@ -53,7 +53,6 @@ func (s *Server) setJobForTest(job Job) {
 
 func request(s *Server, method, path, origin, body string, auth bool) *httptest.ResponseRecorder {
 	r := httptest.NewRequest(method, s.origin+path, strings.NewReader(body))
-	r.Host = "localhost:17777"
 	if origin != "" {
 		r.Header.Set("Origin", origin)
 	}
@@ -191,6 +190,43 @@ func TestKeyboardPreferenceDoesNotRestartOrChangeNetwork(t *testing.T) {
 	}
 	if host.CheckPrivateFile(s.configPath) != nil {
 		t.Fatal("profile permissions")
+	}
+}
+
+func TestDisplayPreferenceAppliesAtNextLaunch(t *testing.T) {
+	s := testServer(t)
+	cfg, err := cage.Load(s.configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.ready = true
+	s.credentials.DisplayScale = 2
+	p := s.preferences
+	p.BalancedDisplay = true
+	if err := s.apply(savedProfile{cfg, p}, true); err != nil {
+		t.Fatal(err)
+	}
+	// Reconnecting before the next launch must still size the active 2x display.
+	w := request(s, "GET", "/api/vnc-credentials", "", "", true)
+	var active struct {
+		Scale float64 `json:"display_scale"`
+	}
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &active) != nil || active.Scale != 2 {
+		t.Fatal("reconnect lost the running display density")
+	}
+	// A client that omits the new preference must preserve the user's choice.
+	settings := request(s, "GET", "/api/settings", "", "", true)
+	var payload map[string]any
+	if err = json.Unmarshal(settings.Body.Bytes(), &payload); err != nil || payload["balanced_display"] != true {
+		t.Fatal("saved display preference unavailable")
+	}
+	delete(payload, "balanced_display")
+	body, _ := json.Marshal(payload)
+	r := httptest.NewRequest("POST", "/api/settings", strings.NewReader(string(body)))
+	r.Header.Set("Content-Type", "application/json")
+	next, ok := s.proposed(httptest.NewRecorder(), r)
+	if !ok || !next.Preferences.BalancedDisplay || next.Config != cfg {
+		t.Fatal("legacy settings save changed the display preference or network configuration")
 	}
 }
 

@@ -38,20 +38,21 @@ type GateCounters struct {
 }
 
 type GateStatus struct {
-	Epoch          uint64        `json:"epoch"`
-	PolicyVerified bool          `json:"policy_verified"`
-	Policy         string        `json:"policy"`
-	RunID          string        `json:"run_id"`
-	CheckID        string        `json:"check_id,omitempty"`
-	CheckStartedAt time.Time     `json:"check_started_at,omitempty"`
-	Configuration  string        `json:"configuration"`
-	Mode           string        `json:"mode"`
-	Fault          bool          `json:"fault"`
-	Until          time.Time     `json:"until"`
-	Reason         string        `json:"reason,omitempty"`
-	Counters       GateCounters  `json:"counters"`
-	Connections    int           `json:"connections"`
-	Report         *SafetyReport `json:"report,omitempty"`
+	IPv6LinkProbeCheck string        `json:"ipv6_link_probe_check,omitempty"`
+	Epoch              uint64        `json:"epoch"`
+	PolicyVerified     bool          `json:"policy_verified"`
+	Policy             string        `json:"policy"`
+	RunID              string        `json:"run_id"`
+	CheckID            string        `json:"check_id,omitempty"`
+	CheckStartedAt     time.Time     `json:"check_started_at,omitempty"`
+	Configuration      string        `json:"configuration"`
+	Mode               string        `json:"mode"`
+	Fault              bool          `json:"fault"`
+	Until              time.Time     `json:"until"`
+	Reason             string        `json:"reason,omitempty"`
+	Counters           GateCounters  `json:"counters"`
+	Connections        int           `json:"connections"`
+	Report             *SafetyReport `json:"report,omitempty"`
 }
 
 // EgressGate is owned by the hostagent, not by the guest or browser UI.
@@ -212,6 +213,7 @@ func (g *EgressGate) BeginCheck() error {
 	g.mu.Lock()
 	connections := g.transitionLocked(GateChecking, false, "关键检查进行中")
 	g.state.CheckID = hex.EncodeToString(id[:])
+	g.state.IPv6LinkProbeCheck = ""
 	g.state.CheckStartedAt = time.Now()
 	g.probeRequests = 0
 	g.armLocked(3 * time.Minute)

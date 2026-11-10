@@ -1,3 +1,6 @@
+import { MobilePairSettings } from "./mobile-pair-settings";
+import { ArchivedSessions } from "./cli-sessions";
+import { Smartphone } from "lucide-react";
 import { PasswordVaultSettings } from "./password-vault";
 import { KeyRound } from "lucide-react";
 import { InlineSelect } from "./inline-select";
@@ -12,12 +15,14 @@ import {
   LoaderCircle,
   RotateCcw,
   ArrowLeft,
-  SlidersHorizontal,
+  Settings,
   Palette,
   UserRound,
   UsersRound,
+  Archive,
 } from "lucide-react";
 import { api } from "./api";
+import { SafetyMessage } from "./safety-message";
 import { AppearanceSettings } from "./appearance-settings";
 import { ProxySettings } from "./proxy-settings";
 import { ExitPolicyFields } from "./exit-policy";
@@ -26,14 +31,17 @@ import { EnvironmentVersions } from "./environment-versions";
 import { EnvironmentStorage } from "./environment-storage";
 import { ResourceSettings } from "./resources";
 import { DiagnosticSettings } from "./diagnostics.jsx";
+import { MacOSLogin } from "./macos-login";
 import { AccountSettings } from "./account";
 import { ClaudeAccountsPanel } from "./claude-accounts";
 const sections = [
   ["account", "账户", UserRound],
   ["vault", "密码保险箱", KeyRound],
   ["claude-accounts", "Claude 账号", UsersRound],
-  ["keyboard", "通用", SlidersHorizontal],
+  ["archived-sessions", "已归档会话", Archive],
+  ["keyboard", "通用", Settings],
   ["appearance", "外观", Palette],
+  ["mobile", "远程连接", Smartphone],
   ["network", "网络与代理", Globe2],
   ["region", "时区与语言", Clock3],
   ["project", "环境与恢复", RotateCcw],
@@ -52,6 +60,7 @@ export function SettingsPanel({
   const [localKeyboard, setLocalKeyboard] = useState(() => clientKeyboard(current.keyboard));
   const [accountDirty, setAccountDirty] = useState(false);
   const [proxyDirty, setProxyDirty] = useState(false);
+  const [resourceDirty, setResourceDirty] = useState(false);
   const [draft, setDraft] = useState({ ...current }),
     [section, setSection] = useState(initialSection),
     [probe, setProbe] = useState(null),
@@ -63,10 +72,12 @@ export function SettingsPanel({
   const changed =
     JSON.stringify({
       ...draft,
+      browser_home_url: undefined,
       exit_policy: canonicalExitPolicy(draft.exit_policy),
     }) !==
     JSON.stringify({
       ...current,
+      browser_home_url: undefined,
       exit_policy: canonicalExitPolicy(current.exit_policy),
     });
   const environmentChanged = [
@@ -84,7 +95,7 @@ export function SettingsPanel({
       : draft[k] !== current[k],
   );
   const busy =
-    Boolean(status.job?.running) || probing || submitting || Boolean(jobId);
+    Boolean(status.job?.running) || Boolean(status.storage_recovery?.required) || probing || submitting || Boolean(jobId);
   const update = (key, value) => {
     setDraft((p) => ({ ...p, [key]: value }));
     if (["dns_url"].includes(key)) setProbe(null);
@@ -97,7 +108,7 @@ export function SettingsPanel({
       return;
     }
     if (
-      (!changed && !accountDirty && !proxyDirty) ||
+      (!changed && !accountDirty && !proxyDirty && !resourceDirty) ||
       (await onConfirm({
         title: "放弃尚未保存的修改？",
         body: "当前环境不会改变。关闭后会丢弃这次表单修改。",
@@ -109,13 +120,15 @@ export function SettingsPanel({
   useEffect(() => {
     if (jobId && status.job?.id === jobId && !status.job.running) {
       setJobId("");
-      if (status.job.error) setError(status.job.error);
-      else {
+      if (status.job.error || status.job.canceled) {
+        if (status.job.settings_saved) onSaved();
+        setError(status.job.error || status.job.message);
+      } else {
         onSaved();
         if (!proxyDirty) onClose();
       }
     }
-  }, [status.job]);
+  }, [status.job, jobId]);
   const check = async () => {
     setProbing(true);
     setProbeFailed(false);
@@ -153,7 +166,9 @@ export function SettingsPanel({
     setError("");
     setSubmitting(true);
     try {
-      const result = await api("/settings", draft);
+      const payload = { ...draft };
+      delete payload.browser_home_url;
+      const result = await api("/settings", payload);
       setJobId(result.id);
     } catch (e) {
       setError(e.message);
@@ -227,8 +242,9 @@ export function SettingsPanel({
         </nav>
       </aside>
       <div className="settings-main">
-        <div className={section === "claude-accounts" ? "settings-content settings-content--accounts" : "settings-content"} ref={contentRef}>
+        <div className={section === "archived-sessions" ? "settings-content settings-content--archives" : section === "claude-accounts" ? "settings-content settings-content--accounts" : section === "mobile" ? "settings-content settings-content--remote" : "settings-content"} ref={contentRef}>
           {section === "appearance" && <AppearanceSettings />}
+          {section === "archived-sessions" && <ArchivedSessions ready={status.ready && !busy} />}
           {section === "vault" && <PasswordVaultSettings onConfirm={onConfirm} onDirty={setAccountDirty} />}
           {section === "account" && <AccountSettings busy={busy} onDirty={setAccountDirty} />}
           {section === "claude-accounts" && <ClaudeAccountsPanel store={claudeProfiles} tabs={terminalTabs} onConfirm={onConfirm}
@@ -238,7 +254,10 @@ export function SettingsPanel({
               await onClaudeLogin(id);
               onClose();
             }} />}
-          <fieldset className="settings-fields" disabled={busy}>
+          <fieldset className="settings-fields" disabled={busy && !(section === "project" && status.storage_recovery?.required)}>
+            {section === "mobile" && (isRemoteClient()
+              ? <section className="section-title"><h3>连接这台电脑</h3><p>请先切换到这台电脑的本机环境，再生成或管理手机配对码。</p></section>
+              : <MobilePairSettings relay={draft.mobile_relay ?? ""} savedRelay={current.mobile_relay ?? ""} onChange={value => update("mobile_relay",value)} onConfirm={onConfirm} />)}
             {section === "network" && (
               <>
                 <ProxySettings
@@ -314,7 +333,7 @@ export function SettingsPanel({
                 </div>
                 {!draft.auto_timezone && !draft.auto_language && (
                   <p className="field-help">
-                    时区和语言将使用下方手动选择的值。静态 IP 或不限制地区时无需位置查询；国家、城市限制仍须检测出口所在地。
+                    时区和语言将使用下方手动选择的值。所有出口仍须查询国家或地区，确认不属于中国大陆；静态 IP 和不限地区也不能跳过此检查。
                   </p>
                 )}
                 <label className="toggle-row">
@@ -470,21 +489,6 @@ export function SettingsPanel({
                   <p>管理工作台的按键习惯与日常操作。</p>
                 </div>
                 <label>
-                  浏览器默认网站
-                  <input
-                    type="url"
-                    value={draft.browser_home_url || "https://www.bing.com/"}
-                    onChange={(e) => update("browser_home_url", e.target.value)}
-                    placeholder="https://www.bing.com/"
-                    spellCheck="false"
-                    autoComplete="off"
-                  />
-                </label>
-                <p className="field-help">
-                  打开浏览器或新建网页时访问此网址。使用完整的 HTTP 或 HTTPS
-                  网址；保存后生效，无需重启环境。
-                </p>
-                <label>
                   Claude 终端启动命令
                   <input
                     value={draft.claude_terminal_command ?? "claude"}
@@ -499,18 +503,26 @@ export function SettingsPanel({
                   选择“Claude 终端”后，在所选项目中运行此命令，例如 claude --continue。
                   留空使用 claude；保存后仅影响新建的 Claude 终端，退出 Claude 后可继续使用 shell。
                 </p>
+                {typeof current.balanced_display === "boolean" && <label className="toggle-row">
+                  <span>
+                    <strong>优先流畅</strong>
+                    <small>降低浏览器和 Claude Desktop 的清晰度。下次启动环境时生效。</small>
+                  </span>
+                  <input type="checkbox" role="switch" checked={draft.balanced_display}
+                    onChange={(event) => update("balanced_display", event.target.checked)} />
+                </label>}
                 <h4>键盘习惯</h4>
                 <div className="choice-list">
                   {[
                     [
                       "mac",
                       "Mac 快捷键",
-                      "网页和编辑器中将 ⌘ 映射为 Ctrl，例如查找、保存和撤销。",
+                      "使用 ⌘ 操作网页和编辑器。Linux、Windows 客机使用对应的 Ctrl 快捷键，macOS 客机保留 Command。",
                     ],
                     [
                       "native",
-                      "原生 Linux 快捷键",
-                      "使用 Ctrl 组合键，保留远程系统原有按键行为。",
+                      "客机原生快捷键",
+                      "按客机系统的习惯使用 Control、Command 和其他组合键。",
                     ],
                   ].map(([value, title, help]) => (
                     <label
@@ -590,8 +602,17 @@ export function SettingsPanel({
                 <p className="footnote">
                   切换项目只改变新终端和文件编辑器的起始位置；已有终端、网页和登录态会保留。
                 </p>
-                <EnvironmentVersions status={status} onConfirm={onConfirm} />
-                <ResourceSettings status={status} onConfirm={onConfirm} />
+                {!status.storage_recovery?.required && <EnvironmentVersions status={status} onConfirm={onConfirm} />}
+                {status.guest_system === "macos" && <section aria-label="客机系统权限">
+                  <h4>客机系统权限</h4>
+                  <p className="field-help">在受限的客机系统设置窗口中完成授权，Cage 会自动检查并重新连接项目。</p>
+                  <div className="project-recovery-actions">
+                    <MacOSLogin maintenance="projects" label="文件共享权限" disabled={!status.ready || busy} />
+                    <MacOSLogin maintenance="screen" label="屏幕录制权限" disabled={!status.ready || busy} />
+                    <MacOSLogin maintenance="input" label="辅助功能权限" disabled={!status.ready || busy} />
+                  </div>
+                </section>}
+                {!status.storage_recovery?.required && <ResourceSettings status={status} onConfirm={onConfirm} onDirtyChange={setResourceDirty} />}
  <DiagnosticSettings />
                 {status.can_restore && (
                   <button
@@ -623,7 +644,7 @@ export function SettingsPanel({
           </fieldset>
           {error && (
             <div role="alert" className="error-message">
-              {error}
+              <SafetyMessage message={error} />
               {probeFailed && (draft.auto_timezone || draft.auto_language) && (
                 <button
                   className="text-button"
@@ -645,7 +666,7 @@ export function SettingsPanel({
             </div>
           )}
         </div>
-        {(!["appearance", "account", "claude-accounts", "vault"].includes(section) || changed) && (
+        {(!["appearance", "browser", "account", "claude-accounts", "vault", "mobile", "archived-sessions", "project"].includes(section) || changed) && (
           <footer className="settings-footer">
             {" "}
             <>

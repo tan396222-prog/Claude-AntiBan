@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/containerenv"
+	"github.com/sylvinus/agent-vm/internal/guestos"
 	"github.com/sylvinus/agent-vm/internal/managedproxy"
 	"github.com/sylvinus/agent-vm/internal/version"
 )
@@ -34,6 +36,8 @@ func (identity ControllerIdentity) matches(other ControllerIdentity) bool {
 }
 
 type launchResponse struct {
+	ConfigPath     string             `json:"config_path,omitempty"`
+	ClientOnly     bool               `json:"client_only,omitempty"`
 	DesktopGateway bool               `json:"desktop_gateway,omitempty"`
 	URL            string             `json:"url"`
 	Controller     ControllerIdentity `json:"controller"`
@@ -66,6 +70,14 @@ func (s *Server) handoff(w http.ResponseWriter, r *http.Request) {
 
 // handoffLocked takes ownership of the operation lock and releases it on all paths.
 func (s *Server) handoffLocked(w http.ResponseWriter) {
+	s.handoffWithVMOwnerLocked(w, "")
+}
+
+// Installation activation may retain its newly provisioned, verified guest.
+// Ordinary updates pass no permitted owner and still require a stopped VM.
+func (s *Server) handoffWithVMOwnerLocked(w http.ResponseWriter, permittedOwner string) {
+	owners, probeError := controllerVMOwners(s.profile)
+	vmBusy := probeError != nil || len(owners) != 0 && (permittedOwner == "" || len(owners) != 1 || owners[0] != permittedOwner)
 	s.mu.Lock()
 	if s.closing {
 		s.mu.Unlock()
@@ -73,8 +85,9 @@ func (s *Server) handoffLocked(w http.ResponseWriter) {
 		http.Error(w, "后台正在更新，请重新打开 Cage。", http.StatusServiceUnavailable)
 		return
 	}
-	busy := s.jobs.snapshot().Running || controllerHasVM(s.profile)
+	busy := s.jobs.snapshot().Running || vmBusy
 	busy = busy || s.terminals.hasLive()
+	busy = busy || len(s.mobileCLI.activeAccounts()) != 0
 	if busy || s.shutdown == nil {
 		s.mu.Unlock()
 		s.op.Unlock()
@@ -115,6 +128,25 @@ func controllerVMState(profile string) (bool, error) {
 }
 
 func controllerVMOwners(profile string) ([]string, error) {
+	binding, err := guestos.LoadWindowsProfile(profile)
+	if err != nil {
+		return nil, err
+	}
+	if binding != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		state, err := guestos.WindowsVMResources(ctx, profile, 0, 0)
+		if err != nil {
+			return nil, err
+		}
+		if state.State == "" {
+			return nil, errors.New("无法确认已绑定 Windows 客机的运行状态，现有环境保持不变")
+		}
+		if state.State == "Off" || state.State == "Saved" {
+			return nil, nil
+		}
+		return []string{fmt.Sprintf("windows/%s/%s", binding.VMID, state.State)}, nil
+	}
 	if containerenv.Configured(profile) {
 		environment, err := containerenv.Load(profile)
 		if err != nil {
@@ -139,12 +171,13 @@ func controllerVMOwners(profile string) ([]string, error) {
 			return nil, err
 		}
 		var record struct {
-			PID int `json:"pid"`
+			PID     int    `json:"pid"`
+			Started string `json:"started"`
 		}
 		if json.Unmarshal(b, &record) != nil || record.PID <= 0 {
 			return nil, errors.New("环境进程记录无效")
 		}
-		if processExists(record.PID) {
+		if processExists(record.PID) && cage.ProcessStartMatches(record.PID, record.Started) {
 			owners = append(owners, fmt.Sprintf("%s/%d", filepath.Base(filepath.Dir(path)), record.PID))
 		}
 	}

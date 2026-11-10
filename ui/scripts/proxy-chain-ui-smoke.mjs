@@ -48,7 +48,7 @@ try {
  const before=await relativeExit();
  await via.click();
  const after=await relativeExit();
- assert.ok(after-before>80,'dropdown must push the following exit down');
+ assert.ok(Math.abs(after-before)<1,'floating dropdown must not move the following exit');
  const list=await page.getByRole('listbox',{name:'中转节点选项'}).boundingBox();
  const container=await page.locator('.proxy-route').boundingBox();
  assert.ok(list.x>=container.x && list.x+list.width<=container.x+container.width,'dropdown escapes its container');
@@ -131,5 +131,5 @@ try {
  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  await page.screenshot({path:path.join(output,'dark.png'),animations:'disabled'});
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,submissions:submissions.length,checks:['network-check exit-rules entry','cross-source route draft','inline layout reflow','keyboard selection and focus','explicit atomic apply','reload persistence','failed apply keeps draft','retry','multiple transit nodes','undo','leave and section-change confirmation','saving DNS preserves route draft','single-node mode','narrow viewport'],browserErrors:errors}));
+ console.log(JSON.stringify({passed:true,submissions:submissions.length,checks:['network-check exit-rules entry','cross-source route draft','floating options keep layout fixed','keyboard selection and focus','explicit atomic apply','reload persistence','failed apply keeps draft','retry','multiple transit nodes','undo','leave and section-change confirmation','saving DNS preserves route draft','single-node mode','narrow viewport'],browserErrors:errors}));
 } finally {await browser.close();}

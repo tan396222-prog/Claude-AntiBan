@@ -51,7 +51,7 @@ const site = http.createServer((req, res) => {
       };
     </script>` : "";
   const frame = req.url === "/frame" ? `<iframe id="child" width="1000" height="300" allow="clipboard-write" src="http://127.0.0.1:${site.address().port}/copy"></iframe>` : "";
-  res.end(`<!doctype html><title>${req.url}</title><link rel="icon" href="${iconOrigin}/${icon}.svg"><p>Isolated browser metadata fixture</p>${buttons}${frame}`);
+  res.end(`<!doctype html><script>globalThis.webdriverAtLoad = navigator.webdriver</script><title>${req.url}</title><link rel="icon" href="${iconOrigin}/${icon}.svg"><p>Isolated browser metadata fixture</p>${buttons}${frame}`);
 });
 await new Promise(resolve => site.listen(0, "127.0.0.1", resolve));
 const origin = `http://localhost:${site.address().port}`;
@@ -175,6 +175,7 @@ try {
   const id = initial.id, red = initial.favicon;
   checkPNG(red);
   assert.equal(await evaluate(id, "navigator.webdriver"), false);
+  assert.equal(await evaluate(id, "globalThis.webdriverAtLoad"), false, "identity must be ready before the first website script");
   assert.equal((await api("/tabs")).tabs.find(item => item.id === id).favicon, red);
 
   await api("/navigate", { id, url: origin + "/blue" });

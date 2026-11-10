@@ -279,10 +279,7 @@ esac
 			if _, err := os.Stat(filepath.Join(dir, "installed")); err != nil {
 				t.Fatal(err)
 			}
-			want := "mirror\n"
-			if arch == "amd64" {
-				want += "upstream\n"
-			}
+			want := "upstream\n"
 			if got, err := os.ReadFile(filepath.Join(dir, "sources")); err != nil || string(got) != want {
 				t.Fatalf("sources: %q, want %q (%v)", got, want, err)
 			}

@@ -553,29 +553,22 @@ func (l *LimaQemuDriver) Start(ctx context.Context) (chan error, error) {
 		return nil, err
 	}
 	l.qCmd = qCmd
-	l.qWaitCh = make(chan error, 1)
-	go func() {
-		defer close(l.qWaitCh)
-		defer cancel()
-		err := qCmd.Wait()
-		if l.usernetStop != nil {
-			l.usernetStop()
-		}
-		l.qWaitCh <- err
-	}()
 	l.vhostCmds = vhostCmds
-	go func() {
+	l.qWaitCh = watchQEMU(qCmd.Wait, func() error {
 		client := l.usernetClient
 		if usernetIndex := limayaml.FirstUsernetIndex(l.Instance.Config); usernetIndex != -1 {
 			client = usernet.NewClientByName(l.Instance.Config.Networks[usernetIndex].Lima)
 		}
 		if client != nil {
-			err := client.ConfigureDriver(ctx, l.Instance, l.SSHLocalPort)
-			if err != nil {
-				l.qWaitCh <- err
-			}
+			return client.ConfigureDriver(ctx, l.Instance, l.SSHLocalPort)
 		}
-	}()
+		return nil
+	}, func() {
+		cancel()
+		if l.usernetStop != nil {
+			l.usernetStop()
+		}
+	})
 
 	// QEMU's UEFI boot order doesn't work well for Windows guest OS.
 	// We send a key periodically to proceed from "Press any key to boot from CD or DVD...".
@@ -834,7 +827,7 @@ func (l *LimaQemuDriver) killSwtpm() error {
 	return nil
 }
 
-func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration, qCmd *exec.Cmd, qWaitCh <-chan error) error {
+func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration, qCmd *exec.Cmd, qWaitCh chan error) error {
 	// "power button" refers to ACPI on the most archs, except RISC-V
 	logrus.Info("Shutting down QEMU with the power button")
 	client := l.usernetClient
@@ -892,7 +885,7 @@ func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration
 	}
 }
 
-func (l *LimaQemuDriver) killQEMU(_ context.Context, _ time.Duration, qCmd *exec.Cmd, qWaitCh <-chan error) error {
+func (l *LimaQemuDriver) killQEMU(_ context.Context, _ time.Duration, qCmd *exec.Cmd, qWaitCh chan error) error {
 	var qWaitErr error
 	if qCmd.ProcessState == nil {
 		if killErr := qCmd.Process.Kill(); killErr != nil {

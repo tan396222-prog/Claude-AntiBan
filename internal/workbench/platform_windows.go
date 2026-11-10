@@ -16,6 +16,7 @@ func lockController(f *os.File) error {
 func unlockController(f *os.File) error {
 	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, new(windows.Overlapped))
 }
+func controllerLockContended(err error) bool { return errors.Is(err, windows.ERROR_LOCK_VIOLATION) }
 func processExists(pid int) bool {
 	if pid <= 0 {
 		return false
@@ -32,10 +33,7 @@ func terminateLegacy(pid int) error {
 	return errors.New("Windows 不支持接管未验证的旧版后台")
 }
 func detachController(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.DETACHED_PROCESS}
-}
-func hideCommand(cmd *exec.Cmd) {
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW}
 }
 func sshExecutable() string {
 	exe, _ := os.Executable()

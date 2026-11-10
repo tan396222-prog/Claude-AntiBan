@@ -1,0 +1,8 @@
+#!/bin/bash
+# The project authorization helper starts this fixed executable inside the mount.
+set -euo pipefail
+project=${PWD##*/}
+[[ $project =~ ^[a-f0-9]{24}$ && $PWD == "$HOME/Cage/Projects/$project" ]]
+config="$HOME/Library/Application Support/Cage/EditorSessions/$project.yaml"
+[[ -f $config && ! -L $config && $(/usr/bin/stat -f %u "$config") == "$(id -u)" ]]
+exec /usr/local/libexec/cage-workbench-browser-4.145.0-pw1.65.0/editor/bin/code-server --config "$config" --disable-telemetry --disable-update-check "$PWD"

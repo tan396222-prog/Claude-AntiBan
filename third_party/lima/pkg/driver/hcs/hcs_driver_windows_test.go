@@ -127,6 +127,7 @@ func TestConfigure(t *testing.T) {
 
 	t.Run("fills in the HCS defaults", func(t *testing.T) {
 		inst := newTestInstance(t, &limatype.LimaYAML{Arch: &arch})
+		inst.SSHAddress = "192.0.2.10"
 
 		l := New()
 		configured, err := l.Configure(t.Context(), inst)
@@ -137,6 +138,7 @@ func TestConfigure(t *testing.T) {
 		assert.Equal(t, *inst.Config.MountType, limatype.REVSSHFS)
 		assert.Equal(t, l.Instance, inst)
 		assert.Equal(t, l.SSHLocalPort, inst.SSHLocalPort)
+		assert.Equal(t, l.sshAddress, inst.SSHAddress)
 	})
 
 	t.Run("keeps the values that are already set", func(t *testing.T) {

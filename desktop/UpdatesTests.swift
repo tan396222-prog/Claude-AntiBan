@@ -168,6 +168,28 @@ enum UpdatesTests {
         try expect(!updater.awaitingInitialWorkbench, "initialized workbench keeps ordinary quit confirmation")
         try expect(FileManager.default.fileExists(atPath: root.appendingPathComponent("profile/updates/launch-\(confirmation).json").path), "explicit workbench readiness writes installer acknowledgement")
 
+        let probeBundle = root.appendingPathComponent("retry-protocol.app")
+        let resources = probeBundle.appendingPathComponent("Contents/Resources")
+        try CageUpdateFiles.privateDirectory(resources)
+        let countFile = root.appendingPathComponent("retry-invocations")
+        let retryAt = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3600))
+        let script = "#!/bin/sh\nprintf x >> '\(countFile.path)'\nprintf '%s\\n' '{\"phase\":\"failed\",\"message\":\"limited\",\"retryable\":true,\"retryAt\":\"\(retryAt)\"}'\nexit 1\n"
+        let probe = resources.appendingPathComponent("cage")
+        try Data(script.utf8).write(to: probe)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: probe.path)
+        var received: [String: Any] = [:]
+        let limited = CageAppUpdater(bundleURL: probeBundle, onChange: { received = $0 }, quit: {}, reconnect: {})
+        _ = limited.handle("check")
+        let deadline = Date().addingTimeInterval(5)
+        while received["phase"] as? String != "failed" && Date() < deadline { _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.01)) }
+        // Drain the process-exit callback as well as the streamed failed state.
+        _ = RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        try expect(limited.handle("status")["retryAt"] as? String == retryAt, "native process-exit handling retained server retry deadline")
+        _ = limited.handle("check"); _ = limited.handle("install")
+        let invocationData = try Data(contentsOf: countFile)
+        try expect(String(data: invocationData, encoding: .utf8) == "x", "native menu or install bypassed cooldown")
+        print("PASS: native update failure retained retry deadline and blocked early check/install")
+
         if CommandLine.arguments.count == 2 {
             let signed = URL(fileURLWithPath: CommandLine.arguments[1])
             let team = try CageUpdateFiles.signingInfo(signed, bundle: true)

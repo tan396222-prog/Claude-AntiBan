@@ -30,15 +30,16 @@ type Node struct {
 	Config map[string]any `json:"config"`
 }
 type Source struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	URL       string    `json:"url,omitempty"`
-	Interval  int       `json:"interval_hours"`
-	Updated   time.Time `json:"updated_at"`
-	Attempted time.Time `json:"attempted_at"`
-	Error     string    `json:"error,omitempty"`
-	Usage     string    `json:"usage,omitempty"`
-	Nodes     []Node    `json:"nodes"`
+	ID        string      `json:"id"`
+	Name      string      `json:"name"`
+	URL       string      `json:"url,omitempty"`
+	Interval  int         `json:"interval_hours"`
+	Updated   time.Time   `json:"updated_at"`
+	Attempted time.Time   `json:"attempted_at"`
+	Error     string      `json:"error,omitempty"`
+	Usage     string      `json:"usage,omitempty"`
+	Nodes     []Node      `json:"nodes"`
+	Skipped   []NodeIssue `json:"skipped,omitempty"`
 }
 type Store struct {
 	Version  int      `json:"version"`
@@ -146,13 +147,39 @@ func (s *Store) Import(name, rawURL string, data []byte, id string, interval int
 	if id == "" {
 		id = Token()[:16]
 	}
-	nodes, err := Parse(data, id)
+	nodes, skipped, err := parseNodes(data, id)
 	if err != nil {
 		return err
 	}
-	src := Source{ID: id, Name: name, URL: rawURL, Interval: interval, Updated: time.Now(), Attempted: time.Now(), Nodes: nodes, Usage: usage}
+	src := Source{ID: id, Name: name, URL: rawURL, Interval: interval, Updated: time.Now(), Attempted: time.Now(), Nodes: nodes, Usage: usage, Skipped: skipped}
 	for i := range s.Sources {
 		if s.Sources[i].ID == id {
+			// Refresh must retain every hop of the saved route, including legacy
+			// node-level dialers. A partial import cannot shorten a working chain.
+			route, routeErr := s.Route()
+			if s.Selected != "" && routeErr != nil {
+				return routeErr
+			}
+			available := make(map[string]bool, len(nodes))
+			for _, n := range nodes {
+				available[n.ID] = true
+			}
+			required := make(map[string]bool, len(route))
+			for _, hop := range route {
+				required[hop] = true
+			}
+			for _, old := range s.Sources[i].Nodes {
+				if required[old.ID] && !available[old.ID] {
+					reason := "节点未包含在更新中"
+					for _, issue := range skipped {
+						if issue.Name == old.Name {
+							reason = issue.Reason
+							break
+						}
+					}
+					return fmt.Errorf("订阅更新移除或跳过了当前出口或中转节点 %q：%s；原配置已保留，请先应用其他节点再更新", old.Name, reason)
+				}
+			}
 			s.Sources[i] = src
 			return nil
 		}
@@ -161,96 +188,19 @@ func (s *Store) Import(name, rawURL string, data []byte, id string, interval int
 	return nil
 }
 
-// Node-only import keeps remote files from changing listeners, routes, or file paths.
-func Parse(data []byte, sourceID string) ([]Node, error) {
-	if len(data) == 0 || len(data) > MaxImport {
-		return nil, errors.New("配置为空或超过 8 MiB")
-	}
-	var input struct {
-		Proxies []map[string]any `yaml:"proxies"`
-		Payload []map[string]any `yaml:"payload"`
-	}
-	if yaml.Unmarshal(data, &input) != nil {
-		return nil, errors.New("无法读取 YAML，请导入 Clash/Mihomo 节点订阅或配置")
-	}
-	proxies := input.Proxies
-	if len(proxies) == 0 {
-		proxies = input.Payload
-	}
-	if len(proxies) == 0 || len(proxies) > 3000 {
-		return nil, errors.New("配置需要包含 1–3000 个 proxies 节点；仅含远程 provider 的配置请改为导入节点订阅链接")
-	}
-	allowed := strings.Fields("name type server port password username cipher uuid alterId network tls udp skip-cert-verify servername sni alpn client-fingerprint fingerprint ws-opts grpc-opts http-opts h2-opts reality-opts packet-encoding flow encryption obfs obfs-password auth auth-str up down ports hop-interval recv-window-conn recv-window disable-mtu-discovery fast-open protocol protocol-param obfs-param plugin plugin-opts dialer-proxy smux ip-version tfo mptcp certificate-fingerprint idle-session-check-interval idle-session-timeout min-idle-session global-padding authenticated-length heartbeat-interval reduce-rtt request-timeout max-open-streams max-udp-relay-packet-size congestion-controller udp-relay-mode zero-rtt udp-over-stream udp-over-tcp udp-over-tcp-version ech-opts client-id token transport port-range multiplexing handshake-mode traffic-pattern")
-	keys := map[string]bool{}
-	for _, k := range allowed {
-		keys[k] = true
-	}
-	types := map[string]bool{}
-	for _, k := range strings.Fields("http socks5 ss ssr vmess vless trojan hysteria hysteria2 tuic anytls mieru") {
-		types[k] = true
-	}
-	names := map[string]string{}
-	out := make([]Node, 0, len(proxies))
-	for _, p := range proxies {
-		name, _ := p["name"].(string)
-		typ, _ := p["type"].(string)
-		server, _ := p["server"].(string)
-		if strings.TrimSpace(name) == "" || len(name) > 240 || names[name] != "" || !types[typ] || server == "" || len(server) > 253 {
-			return nil, errors.New("节点名称重复、服务器缺失或协议暂不支持；支持 HTTP/SOCKS5/SS/SSR/VMess/VLESS/Trojan/Hysteria/TUIC/AnyTLS/Mieru")
-		}
-		for k := range p {
-			if !keys[k] {
-				return nil, fmt.Errorf("节点包含不支持的字段 %q，请使用标准节点订阅", k)
-			}
-		}
-		// Nested TLS file references are not accepted even inside transport options.
-		if unsafeOption(p) {
-			return nil, errors.New("节点不能引用本机文件、网络接口或额外路由")
-		}
-		h := sha256.Sum256([]byte(sourceID + "\x00" + name))
-		id := hex.EncodeToString(h[:12])
-		names[name] = id
-		out = append(out, Node{ID: id, Name: name, Type: typ, Config: p})
-	}
-	for i := range out {
-		p := out[i].Config
-		p["name"] = out[i].ID
-		if v, exists := p["dialer-proxy"]; exists {
-			target, ok := v.(string)
-			if !ok || names[target] == "" {
-				return nil, errors.New("代理链必须引用同一来源中的具体节点，不能引用 DIRECT 或选择分组")
-			}
-			p["dialer-proxy"] = names[target]
-		}
-		p["udp"] = false
-	}
-	byID := map[string]map[string]any{}
-	for _, n := range out {
-		byID[n.ID] = n.Config
-	}
-	for _, n := range out {
-		seen := map[string]bool{}
-		id := n.ID
-		for id != "" {
-			if seen[id] {
-				return nil, errors.New("代理链存在循环")
-			}
-			seen[id] = true
-			id, _ = byID[id]["dialer-proxy"].(string)
-		}
-	}
-	return out, nil
-}
 func unsafeOption(v any) bool {
 	switch x := v.(type) {
 	case map[string]any:
 		for k, v := range x {
-			if strings.Contains(k, "path") || k == "ca" || k == "certificate" || k == "private-key" || k == "interface-name" || k == "routing-mark" {
-				if k != "path" {
-					return true
-				}
+			if unsafeField(k, v) {
+				return true
 			}
-			if unsafeOption(v) {
+		}
+	case map[any]any:
+		// YAML maps with a non-string key can still contain core option keys.
+		for k, v := range x {
+			key, _ := k.(string)
+			if unsafeField(key, v) {
 				return true
 			}
 		}
@@ -262,6 +212,18 @@ func unsafeOption(v any) bool {
 		}
 	}
 	return false
+}
+
+func unsafeField(key string, value any) bool {
+	key = optionKey(key)
+	if strings.Contains(key, "path") && key != "path" {
+		return true
+	}
+	switch key {
+	case "ca", "certificate", "private-key", "interface-name", "routing-mark":
+		return true
+	}
+	return unsafeOption(value)
 }
 
 // Route returns the actual hops from entry to exit. Explicit UI chains override
@@ -320,6 +282,10 @@ func (s Store) Runtime(profile string) ([]byte, error) {
 			config := make(map[string]any, len(n.Config))
 			for key, value := range n.Config {
 				config[key] = value
+			}
+			// Older stores may contain legacy headers accepted before normalization.
+			if err := normalizeWebSocket(config); err != nil {
+				return nil, fmt.Errorf("节点 %q：%w", n.Name, err)
 			}
 			if via, overridden := dialers[n.ID]; overridden {
 				delete(config, "dialer-proxy")

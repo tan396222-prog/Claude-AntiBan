@@ -28,8 +28,9 @@ export class LoginBrowser {
     expiry.unref();
     this.contexts.set(browserContextId, { login, expiry });
     try {
-      const { targetId } = await this.cdp("Target.createTarget", { browserContextId, url: url.href, newWindow: true });
-      await activate({ targetId, browserContextId, type: "page", url: url.href });
+      const { targetId } = await this.cdp("Target.createTarget", { browserContextId, url: "about:blank", newWindow: true });
+      const sessionId = await activate({ targetId, browserContextId, type: "page", url: url.href });
+      await this.cdp("Page.navigate", { url: url.href }, sessionId);
       return { id: targetId };
     } catch {
       await this.close(browserContextId);

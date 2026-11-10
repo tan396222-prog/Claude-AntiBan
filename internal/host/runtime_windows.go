@@ -3,13 +3,24 @@ package host
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+// HideCommandWindow prevents a background console child from opening a terminal.
+func HideCommandWindow(cmd *exec.Cmd) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	cmd.SysProcAttr.HideWindow = true
+	cmd.SysProcAttr.CreationFlags |= windows.CREATE_NO_WINDOW
+}
 
 // ConfigureWindowsRuntime uses only the runtime shipped next to cage.exe.
 // The install does not modify the user's system PATH or SSH configuration.

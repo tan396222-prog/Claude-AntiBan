@@ -133,9 +133,24 @@ try {
   console.error(error.message);
 } finally {
   try {
-    const stopped = parseBackend(await execute(backend, ['prepare-update', '--json']));
+    const cleanupRun = await execute(backend, ['prepare-update', '--json']);
+    if (cleanupRun.code !== 0) {
+      // prepare-update returns only status/message. Never log desktop's
+      // entry JSON or arbitrary stdout, which can contain a session URL.
+      let message = '';
+      try {
+        const response = JSON.parse(cleanupRun.stdout);
+        if (typeof response.message === 'string') message = response.message.slice(0, 500);
+      } catch { /* Keep malformed or non-JSON output private. */ }
+      console.error(`Cleanup prepare-update failed (exit ${cleanupRun.code}, signal ${cleanupRun.signal || 'none'}): ${message}`);
+    }
+    const stopped = parseBackend(cleanupRun);
     clean = stopped.status === 'prepared';
-  } catch { /* Preserve the fixture until a remaining controller can be stopped. */ }
+    if (!clean) console.error(`Cleanup prepare-update returned ${stopped.status || 'unknown status'}.`);
+  } catch (error) {
+    console.error(`Cleanup could not confirm controller exit: ${error.message}`);
+    // Preserve the fixture until a remaining controller can be stopped.
+  }
   if (clean) await rm(root, { recursive: true, force: true });
   else { console.error(`Cleanup incomplete; isolated profile retained at ${root}`); result = 1; }
 }

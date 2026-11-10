@@ -32,9 +32,9 @@ func StartServer(ctx context.Context, lis net.Listener, guest *GuestServer) erro
 	go func() {
 		<-ctx.Done()
 		logrus.Debug("Stopping the gRPC server")
-		server.GracefulStop()
-		logrus.Debug("Closing the listener used by the gRPC server")
-		lis.Close()
+		// Event and tunnel streams last for the lifetime of the guest. Cancel
+		// their transports when that lifetime ends so they cannot hold shutdown.
+		server.Stop()
 	}()
 	err := server.Serve(lis)
 	// grpc.Server.Serve() expects to return a non-nil error caused by lis.Accept()

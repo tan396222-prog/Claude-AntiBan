@@ -102,7 +102,9 @@ func (e *app) doctorCmd(ctx context.Context, args []string) int {
 		d.line("fail", f+" adds to every VM's config: agent-vm makes and starts no VM while it is there", "Move it out of the way.")
 	}
 	protects := !writableGitOptOut(false)
-	if protects {
+	if cageWritableGit() {
+		d.line("info", "Cage projects allow Git writes within the shared directories")
+	} else if protects {
 		d.line("ok", "every .git is read-only for the VMs (sshfs.readonlyNames)")
 	} else {
 		d.line("warn", "AGENT_VM_UNSAFE_WRITABLE_GIT=1: the VMs can write .git, and git on this machine runs what .git/config and hooks name",
@@ -276,7 +278,10 @@ func (d *doctor) directory(ctx context.Context, dir string, protects bool, getVM
 	if why, bad := mounts.UnsafeProject(dir, e.refs()); bad {
 		d.line("fail", "this directory "+why, "agent-vm refuses to share it with a VM. Run it from a project directory.")
 	}
-	scan := e.scan(ctx, dir)
+	scan := &gitguard.Result{}
+	if !cageWritableGit() {
+		scan = e.scan(ctx, dir)
+	}
 	names := scan.Names()
 	name := e.instanceName(dir)
 	inst, err := getVM(name)
@@ -310,6 +315,8 @@ func (d *doctor) directory(ctx context.Context, dir string, protects bool, getVM
 		protected := len(inst.Mounts) > 0 && unprotected(inst, nil) == ""
 		current := unprotected(inst, names) == ""
 		switch {
+		case cageWritableGit() && !protected:
+			d.line("info", "its shares allow Git writes in Cage projects")
 		case protected && !current:
 			d.line("warn", "its shares keep .git read-only, but not all of "+strings.Join(names, ", "),
 				"The next start (after 'agent-vm stop' if it runs) fixes that.")

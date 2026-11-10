@@ -15,6 +15,7 @@ import { clientToElement } from './util/element.js';
 import { setCapture } from './util/events.js';
 import EventTargetMixin from './util/eventtarget.js';
 import Display from "./display.js";
+import CageBrowserDisplay from "./cage-browser-display.js";
 import Inflator from "./inflator.js";
 import Deflator from "./deflator.js";
 import Keyboard from "./input/keyboard.js";
@@ -260,7 +261,8 @@ export default class RFB extends EventTargetMixin {
         // NB: nothing that needs explicit teardown should be done
         // before this point, since this can throw an exception
         try {
-            this._display = new Display(this._canvas);
+            const DisplayClass = options.cageBrowserDisplay ? CageBrowserDisplay : Display;
+            this._display = new DisplayClass(this._canvas);
         } catch (exc) {
             Log.Error("Display exception: " + exc);
             throw exc;
@@ -3009,6 +3011,10 @@ export default class RFB extends EventTargetMixin {
         this._fbHeight = height;
 
         this._display.resize(this._fbWidth, this._fbHeight);
+        if (this._display instanceof CageBrowserDisplay && this._rfbConnectionState === 'connected') {
+            // Refresh unchanged regions too, so the stretched preview is fully replaced.
+            RFB.messages.fbUpdateRequest(this._sock, false, 0, 0, width, height);
+        }
 
         // Adjust the visible viewport based on the new dimensions
         this._updateClip();

@@ -1,6 +1,7 @@
 package workbench
 
 import (
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,50 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestTerminalStartupStatePreservesStreamAndReconnect(t *testing.T) {
+	s := testServer(t)
+	t.Cleanup(s.terminals.close)
+	session, err := s.terminals.start(terminalChildCommand("echo"), "/project", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.mu.Lock()
+	session.sharedID = "isolated-session"
+	session.cliStartupDone = make(chan struct{})
+	session.mu.Unlock()
+	server := httptest.NewServer(s.handler())
+	defer server.Close()
+	s.origin = server.URL
+	readState := func(ws *websocket.Conn, pending bool) {
+		t.Helper()
+		_ = ws.SetReadDeadline(time.Now().Add(10 * time.Second))
+		kind, data, err := ws.ReadMessage()
+		var state struct {
+			Type    string `json:"type"`
+			Pending bool   `json:"pending"`
+		}
+		if err != nil || kind != websocket.TextMessage || json.Unmarshal(data, &state) != nil || state.Type != "cli-startup" || state.Pending != pending {
+			t.Fatalf("startup state: kind=%d data=%s err=%v", kind, data, err)
+		}
+	}
+	first := connectTerminalViewer(t, s, server, session.id)
+	readState(first, true)
+	readTerminalViewerUntil(t, first, "terminal-ready")
+	session.finishCLIStartup()
+	readState(first, false)
+	if err := first.WriteJSON(map[string]string{"type": "input", "data": terminalInputLine("after-startup")}); err != nil {
+		t.Fatal(err)
+	}
+	readTerminalViewerUntil(t, first, "child:after-startup")
+	_ = first.Close()
+	second := connectTerminalViewer(t, s, server, session.id)
+	readState(second, false)
+	readTerminalViewerUntil(t, second, "child:after-startup")
+	if session.summary()["cli_starting"] != false {
+		t.Fatal("completed startup remained pending")
+	}
+}
 
 func connectTerminalViewer(t *testing.T, s *Server, server *httptest.Server, id string) *websocket.Conn {
 	t.Helper()
@@ -74,6 +119,28 @@ func TestTerminalViewerDisconnectJoinsSenderAndKeepsPTY(t *testing.T) {
 	s.terminals.remove(session.id)
 	awaitTerminalSignal(t, session.done)
 	awaitTerminalSignal(t, finished)
+}
+
+func TestTerminalHistoryIsMarkedBeforeClipboardReplay(t *testing.T) {
+	s := testServer(t)
+	t.Cleanup(s.terminals.close)
+	history := []byte("\x1b]52;c;Y29weQ==\x07previous output")
+	s.terminals.sessions = map[string]*terminalSession{"history": {id: "history", history: history, closed: true}}
+	server := httptest.NewServer(s.handler())
+	defer server.Close()
+	s.origin = server.URL
+	ws := connectTerminalViewer(t, s, server, "history")
+	_ = ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+	var marker struct {
+		Type string `json:"type"`
+	}
+	if err := ws.ReadJSON(&marker); err != nil || marker.Type != "history" {
+		t.Fatalf("history marker: %+v, %v", marker, err)
+	}
+	kind, data, err := ws.ReadMessage()
+	if err != nil || kind != websocket.BinaryMessage || string(data) != string(history) {
+		t.Fatalf("history bytes changed: kind=%d data=%q err=%v", kind, data, err)
+	}
 }
 
 type blockedInputTerminal struct {

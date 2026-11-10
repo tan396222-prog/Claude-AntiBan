@@ -1,5 +1,6 @@
 import React, { useLayoutEffect, useRef } from "react";
-import { Sparkles, TerminalSquare } from "lucide-react";
+import { TerminalSquare } from "lucide-react";
+import { AgentIcon } from "./agent-icon";
 
 export function TerminalMenu({ choice, busy, onClose, onSelect }) {
   const menu = useRef(null);
@@ -55,7 +56,7 @@ export function TerminalMenu({ choice, busy, onClose, onSelect }) {
         <TerminalSquare size={16} />普通终端
       </button>
       <button role="menuitem" disabled={busy} onClick={() => onSelect("claude")}>
-        <Sparkles size={16} />Claude 终端
+        <AgentIcon />Claude 终端
       </button>
     </div>
   );

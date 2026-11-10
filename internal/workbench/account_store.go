@@ -24,6 +24,7 @@ import (
 )
 
 type accountRecord struct {
+	MacLogin              *macAccountEnvelope      `json:"mac_login,omitempty"`
 	TrustedDevice         string                   `json:"trusted_device,omitempty"`
 	TrustedUnlock         *accountDevice           `json:"trusted_unlock,omitempty"`
 	Version               int                      `json:"version"`
@@ -37,6 +38,7 @@ type accountRecord struct {
 }
 
 type localAccount struct {
+	macSync        sync.Mutex
 	mu             sync.Mutex
 	path           string
 	record         *accountRecord
@@ -49,6 +51,13 @@ type localAccount struct {
 }
 
 type accountView struct {
+	MacOSAccountHost      bool              `json:"macos_account_host,omitempty"`
+	MacOSCredentialsReady bool              `json:"macos_credentials_ready,omitempty"`
+	MacOSUsernameBound    bool              `json:"macos_username_bound,omitempty"`
+	MacOSPasswordPending  bool              `json:"macos_password_pending,omitempty"`
+	MacOSGuestUser        string            `json:"macos_guest_user,omitempty"`
+	InitialMacSetup       bool              `json:"initial_mac_setup,omitempty"`
+	GuestSystem           string            `json:"guest_system,omitempty"`
 	TrustedLocal          bool              `json:"trusted_local,omitempty"`
 	TrustedLogin          bool              `json:"trusted_login,omitempty"`
 	Exists                bool              `json:"exists"`
@@ -152,6 +161,15 @@ func (a *localAccount) viewFor(desktop bool) accountView {
 	v := accountView{Exists: a.record != nil, Unlocked: len(a.key) == 32 && (!a.trustedSession || desktop)}
 	v.DeviceBinding = fmtAccountBinding(a.path)
 	if a.record != nil {
+		if a.record.MacLogin != nil && v.Unlocked {
+			if login, err := a.openMacAccount(); err == nil {
+				v.MacOSCredentialsReady = true
+				v.MacOSUsernameBound = len(login.Guests) != 0
+				for _, guest := range login.Guests {
+					v.MacOSPasswordPending = v.MacOSPasswordPending || guest.Password != login.Password
+				}
+			}
+		}
 		v.TrustedLocal = a.record.TrustedDevice != ""
 		v.TrustedLogin = a.record.TrustedUnlock != nil
 		v.Username = a.record.Username
@@ -202,7 +220,16 @@ func (a *localAccount) lock() {
 }
 
 func (a *localAccount) create(name, password, avatar string) error {
+	return a.createAccount(name, password, avatar, false)
+}
+
+func (a *localAccount) createAccount(name, password, avatar string, mac bool) error {
 	name = strings.TrimSpace(name)
+	if mac {
+		if err := validMacAccount(name, password); err != nil {
+			return err
+		}
+	}
 	if err := validAccountName(name); err != nil {
 		return err
 	}
@@ -226,6 +253,11 @@ func (a *localAccount) create(name, password, avatar string) error {
 	record := &accountRecord{Version: 1, Username: name, Avatar: normalized}
 	if err = sealAccountKey(record, password, key); err != nil {
 		return err
+	}
+	if mac {
+		if err = sealMacAccount(record, key, macAccountData{Password: password}); err != nil {
+			return err
+		}
 	}
 	if err = writePrivate(a.path, record); err != nil {
 		return errors.New("账户未能保存，请检查磁盘空间与目录权限")
@@ -272,6 +304,18 @@ func (a *localAccount) updateProfile(name, avatar string) error {
 	if len(a.key) != 32 {
 		return errors.New("请先解锁 Cage")
 	}
+	if a.record.MacLogin != nil && name != a.record.Username {
+		login, err := a.openMacAccount()
+		if err != nil {
+			return err
+		}
+		if len(login.Guests) != 0 {
+			return errors.New("用户名已用于 macOS 客机，保留该名称以继续使用原账户和文件")
+		}
+		if err := validMacAccount(name, login.Password); err != nil {
+			return err
+		}
+	}
 	record := *a.record
 	record.Username = name
 	record.Avatar = normalized
@@ -301,6 +345,24 @@ func (a *localAccount) changePassword(oldPassword, newPassword string) error {
 	}
 	defer clear(key)
 	record := *a.record
+	if record.MacLogin != nil {
+		login, err := a.openMacAccount()
+		if err != nil {
+			return err
+		}
+		if err = validMacAccount(record.Username, newPassword); err != nil {
+			return err
+		}
+		for _, guest := range login.Guests {
+			if guest.Password != login.Password {
+				return errors.New("客机密码仍待同步，请先启动 macOS 客机并完成同步后再改密")
+			}
+		}
+		login.Password = newPassword
+		if err = sealMacAccount(&record, key, login); err != nil {
+			return err
+		}
+	}
 	if err = sealAccountKey(&record, newPassword, key); err != nil {
 		return err
 	}

@@ -1,0 +1,37 @@
+{
+  "sshfs": {
+    "version": "3.7.6",
+    "commit": "9b68e5f1b978c1d3c6ef7632b68d580a52ec0232",
+    "url": "https://codeload.github.com/libfuse/sshfs/tar.gz/9b68e5f1b978c1d3c6ef7632b68d580a52ec0232",
+    "sha256": "9be20256ac841c6e5b4cd8aefbf57c325f93e9ff01f7c7691edfe9f02700338b"
+  },
+  "glib": {
+    "version": "2.90.1",
+    "formulaSha256": "7352a67a6a1a15554d996d38886812e858bebbbcbf3985901724cab444ee3b3b",
+    "url": "https://download.gnome.org/sources/glib/2.90/glib-2.90.1.tar.xz",
+    "sha256": "93c941aa17d5eb1d53fe838365f29a8b4e539c222a256d974ec8f30fc413e396",
+    "resources": [{
+      "name": "gobject-introspection",
+      "url": "https://download.gnome.org/sources/gobject-introspection/1.86/gobject-introspection-1.86.0.tar.xz",
+      "sha256": "920d1a3fcedeadc32acff95c2e203b319039dd4b4a08dd1a2dfd283d19c0b9ae"
+    }],
+    "patches": [{
+      "file": "Patches/glib/hardcoded-paths.diff",
+      "url": "https://raw.githubusercontent.com/Homebrew/homebrew-core/68093a0680c21eb19fb034af0d8c5104848315e7/Patches/glib/hardcoded-paths.diff",
+      "sha256": "d846efd0bf62918350da94f850db33b0f8727fece9bfaf8164566e3094e80c97"
+    }]
+  },
+  "gettext": {
+    "version": "1.0",
+    "formulaSha256": "dd8d1b5914bb96c9c59140dd8cf76ad1d270f65a88111a395f79fe22106367c6",
+    "additionalFormulaSha256": ["74dbc9cbf1c427c148b5d5247adfb43957b5d02be20a4e1d162aa903f0dd614e"],
+    "url": "https://ftp.gnu.org/gnu/gettext/gettext-1.0.tar.gz",
+    "sha256": "85d99b79c981a404874c02e0342176cf75c7698e2b51fe41031cf6526d974f1a"
+  },
+  "pcre2": {
+    "version": "10.49",
+    "formulaSha256": "94c19a0d869da4990a8f3f371e37c986ad72124d2d94032e061c4a9019f9e174",
+    "url": "https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.49/pcre2-10.49.tar.bz2",
+    "sha256": "53c156e1ba416a20da8e65395daa132da0d80e76910424caca3fcdae7831d384"
+  }
+}

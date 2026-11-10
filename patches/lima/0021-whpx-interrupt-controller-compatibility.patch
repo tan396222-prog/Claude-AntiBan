@@ -1,0 +1,64 @@
+Subject: [PATCH] WHPX: use QEMU interrupt controller emulation for the Cage Linux guest
+
+---
+diff --git a/pkg/driver/qemu/qemu.go b/pkg/driver/qemu/qemu.go
+--- a/pkg/driver/qemu/qemu.go
++++ b/pkg/driver/qemu/qemu.go
+@@ -587,7 +587,7 @@
+ 			args = append(args, "-global", "ICH9-LPC.disable_s3=1")
+ 			args = append(args, "-global", "ICH9-LPC.disable_s4=1")
+ 		default:
+-			args = appendArgsIfNoConflict(args, "-machine", "q35,accel="+accel)
++			args = appendQ35Machine(args, accel)
+ 		}
+ 	case limatype.AARCH64:
+ 		machine := "virt,accel=" + accel
+diff --git a/pkg/driver/qemu/machine.go b/pkg/driver/qemu/machine.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/driver/qemu/machine.go
+@@ -0,0 +1,15 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++func appendQ35Machine(args []string, accel string) []string {
++	machine := "q35,accel=" + accel
++	if accel == "whpx" {
++		// QEMU 11 can fail to enable nested virtualization on WHPX even
++		// when Windows reports it as supported (HRESULT 80370302). Use
++		// QEMU's interrupt controller emulation for the Cage Linux guest.
++		machine += ",kernel-irqchip=off"
++	}
++	return appendArgsIfNoConflict(args, "-machine", machine)
++}
+diff --git a/pkg/driver/qemu/machine_test.go b/pkg/driver/qemu/machine_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/driver/qemu/machine_test.go
+@@ -0,0 +1,24 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import "testing"
++
++func TestWHPXMachineCompatibility(t *testing.T) {
++	for _, accel := range []string{"whpx", "kvm", "hvf", "nvmm"} {
++		want := "q35,accel=" + accel
++		if accel == "whpx" {
++			want += ",kernel-irqchip=off"
++		}
++		args := appendQ35Machine(nil, accel)
++		if got, _ := argValue(args, "-machine"); got != want {
++			t.Fatalf("%s: got %q, want %q", accel, got, want)
++		}
++	}
++	// Retain Lima's explicit override contract for custom QEMU arguments.
++	args := appendQ35Machine([]string{"-machine", "q35,accel=whpx,kernel-irqchip=on"}, "whpx")
++	if len(args) != 2 || args[1] != "q35,accel=whpx,kernel-irqchip=on" {
++		t.Fatalf("overrode explicit machine: %v", args)
++	}
++}

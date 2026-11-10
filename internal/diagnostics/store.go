@@ -179,46 +179,113 @@ func (s *Store) Info() (info Info, err error) {
 	return
 }
 func (s *Store) Record(level, source, message string) error {
-	switch level {
-	case "debug", "info", "warn", "error":
-	default:
-		level = "error"
+	return s.appendEvents([]Event{{Level: level, Source: source, Message: message}})
+}
+
+// appendEvents amortizes filesystem and permission checks across one bounded
+// stream chunk. Rotation still applies between records, under the process lock.
+func (s *Store) appendEvents(events []Event) error {
+	if len(events) == 0 {
+		return nil
 	}
-	// Redact before bounding: cutting a URL or key before redaction can expose a
-	// prefix. Oversized lines are discarded in Stream, not split into fragments.
-	message = Redact(message)
-	if len(message) > MaxMessage {
-		message = message[:MaxMessage] + " [truncated]"
-	}
-	source = Redact(source)
-	if len(source) > 64 {
-		source = "unknown"
-	}
-	b, err := json.Marshal(Event{Time: s.now().UTC().Format(time.RFC3339Nano), Level: level, Source: source, Message: message, PID: os.Getpid()})
-	if err != nil {
-		return err
-	}
-	b = append(b, '\n')
-	return s.withLock(func() error {
-		if err := s.cleanLocked(int64(len(b))); err != nil {
-			return err
+	records := make([][]byte, 0, len(events))
+	var size int64
+	for _, event := range events {
+		switch event.Level {
+		case "debug", "info", "warn", "error":
+		default:
+			event.Level = "error"
 		}
-		path := filepath.Join(s.dir, "events.jsonl")
-		if st, err := os.Lstat(path); err == nil && (st.Size()+int64(len(b)) > s.fileBytes || st.ModTime().UTC().Format("2006-01-02") != s.now().UTC().Format("2006-01-02")) {
-			if !st.Mode().IsRegular() {
-				return errors.New("diagnostic file is not regular")
-			}
-			next := filepath.Join(s.dir, fmt.Sprintf("events-%d-%d.jsonl", s.now().UnixNano(), os.Getpid()))
-			if err := os.Rename(path, next); err != nil {
-				return err
-			}
+		// Redact before bounding; partial secrets must not reach disk.
+		event.Message = Redact(event.Message)
+		if len(event.Message) > MaxMessage {
+			event.Message = event.Message[:MaxMessage] + " [truncated]"
 		}
-		f, err := privateFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
+		event.Source = Redact(event.Source)
+		if len(event.Source) > 64 {
+			event.Source = "unknown"
+		}
+		event.Time = s.now().UTC().Format(time.RFC3339Nano)
+		event.PID = os.Getpid()
+		b, err := json.Marshal(event)
 		if err != nil {
 			return err
 		}
-		_, err = f.Write(b)
-		return errors.Join(err, f.Close())
+		b = append(b, '\n')
+		records = append(records, b)
+		size += int64(len(b))
+	}
+	return s.withLock(func() error {
+		// Oversized batches are split by Stream; cap reserve for small test stores.
+		reserve := min(size, s.fileBytes, s.maxBytes)
+		if err := s.cleanLocked(reserve); err != nil {
+			return err
+		}
+		path := filepath.Join(s.dir, "events.jsonl")
+		var f *os.File
+		defer func() {
+			if f != nil {
+				_ = f.Close()
+			}
+		}()
+		var buffered []byte
+		flush := func() error {
+			if len(buffered) == 0 {
+				return nil
+			}
+			if f == nil {
+				var err error
+				f, err = privateFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND)
+				if err != nil {
+					return err
+				}
+			}
+			_, err := f.Write(buffered)
+			buffered = buffered[:0]
+			return err
+		}
+		var activeSize int64
+		if st, err := os.Lstat(path); err == nil {
+			if !st.Mode().IsRegular() {
+				return errors.New("diagnostic file is not regular")
+			}
+			activeSize = st.Size()
+			if st.ModTime().UTC().Format("2006-01-02") != s.now().UTC().Format("2006-01-02") {
+				activeSize = s.fileBytes // Rotate before the first new record.
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		for _, b := range records {
+			if activeSize > 0 && activeSize+int64(len(b)) > s.fileBytes {
+				if err := flush(); err != nil {
+					return err
+				}
+				if f != nil {
+					if err := f.Close(); err != nil {
+						return err
+					}
+					f = nil
+				}
+				next := filepath.Join(s.dir, fmt.Sprintf("events-%d-%d.jsonl", s.now().UnixNano(), os.Getpid()))
+				if err := os.Rename(path, next); err != nil {
+					return err
+				}
+				if err := s.cleanLocked(min(size, s.fileBytes, s.maxBytes)); err != nil {
+					return err
+				}
+				activeSize = 0
+			}
+			buffered = append(buffered, b...)
+			activeSize += int64(len(b))
+			size -= int64(len(b))
+		}
+		err := flush()
+		if f != nil {
+			err = errors.Join(err, f.Close())
+			f = nil
+		}
+		return err
 	})
 }
 

@@ -1,11 +1,42 @@
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useLayoutEffect, useRef } from "react";
 
-export function Modal({ title, children, onClose, wide = false, footer }) {
+export function Modal({ title, children, onClose, wide = false, footer, anchor }) {
   const panel = useRef(),
     closeRef = useRef(onClose);
   closeRef.current = onClose;
+  useLayoutEffect(() => {
+    if (!anchor) return;
+    const node = panel.current;
+    anchor.setAttribute("aria-expanded", "true");
+    const position = () => {
+      if (!anchor.isConnected) {
+        closeRef.current?.();
+        return;
+      }
+      const rect = anchor.getBoundingClientRect();
+      const box = node.getBoundingClientRect();
+      const left = Math.max(8, Math.min(rect.right - box.width, window.innerWidth - box.width - 8));
+      const below = rect.bottom + 6;
+      const top = below + box.height <= window.innerHeight - 8
+        ? below : Math.max(8, rect.top - box.height - 6);
+      node.style.left = `${left}px`;
+      node.style.top = `${top}px`;
+    };
+    position();
+    const observer = new ResizeObserver(position);
+    observer.observe(node);
+    window.addEventListener("resize", position);
+    document.addEventListener("scroll", position, true);
+    return () => {
+      anchor.focus();
+      anchor.removeAttribute("aria-expanded");
+      observer.disconnect();
+      window.removeEventListener("resize", position);
+      document.removeEventListener("scroll", position, true);
+    };
+  }, [anchor]);
   useEffect(() => {
-    const previous = document.activeElement;
+    const previous = anchor || document.activeElement;
     const first = panel.current.querySelector(
       "input:not([disabled]),button:not([disabled]),select:not([disabled])",
     );
@@ -56,7 +87,7 @@ export function Modal({ title, children, onClose, wide = false, footer }) {
   }, []);
   return (
     <div
-      className="modal-scrim"
+      className={`modal-scrim${anchor ? " anchored-modal-scrim" : ""}`}
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose?.();
       }}

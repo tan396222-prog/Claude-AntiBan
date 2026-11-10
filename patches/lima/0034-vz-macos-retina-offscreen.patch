@@ -1,0 +1,17 @@
+--- a/pkg/driver/vz/vm_darwin.go
++++ b/pkg/driver/vz/vm_darwin.go
+@@ -632,7 +632,13 @@
+ 		var graphicsDeviceConfiguration vz.GraphicsDeviceConfiguration
+ 		if *inst.Config.OS == limatype.DARWIN {
+ 			var err error
+-			graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(1920, 1200, 80)
++			if *inst.Config.Video.Display == "offscreen" {
++				// macOS uses the display's physical density to select Retina backing.
++				// Keep a 1920 x 1200 point workspace for the embedded application.
++				graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(3840, 2400, 220)
++			} else {
++				graphicsDeviceConfiguration, err = newMacGraphicsDeviceConfiguration(1920, 1200, 80)
++			}
+ 			if err != nil {
+ 				return err
+ 			}

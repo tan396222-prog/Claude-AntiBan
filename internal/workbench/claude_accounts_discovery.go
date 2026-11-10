@@ -22,13 +22,14 @@ type claudeDetected struct {
 }
 
 type claudePanel struct {
-	UsagePanelRunning      bool            `json:"usage_panel_running"`
-	UsageUnavailableReason string          `json:"usage_unavailable_reason,omitempty"`
-	Accounts               []claudeAccount `json:"accounts"`
-	Detected               *claudeDetected `json:"detected,omitempty"`
-	DetectionStatus        string          `json:"detection_status"`
-	DetectionError         string          `json:"detection_error,omitempty"`
-	LoginNotice            string          `json:"login_notice,omitempty"`
+	Scheduling             claudeScheduling `json:"scheduling"`
+	UsagePanelRunning      bool             `json:"usage_panel_running"`
+	UsageUnavailableReason string           `json:"usage_unavailable_reason,omitempty"`
+	Accounts               []claudeAccount  `json:"accounts"`
+	Detected               *claudeDetected  `json:"detected,omitempty"`
+	DetectionStatus        string           `json:"detection_status"`
+	DetectionError         string           `json:"detection_error,omitempty"`
+	LoginNotice            string           `json:"login_notice,omitempty"`
 }
 
 func (s *Server) probeClaude(ctx context.Context, guestID string) (claudeGuestSnapshot, error) {
@@ -221,6 +222,7 @@ func (s *Server) claudePanelView(ctx context.Context) (claudePanel, claudeAccoun
 		return view, list, err
 	}
 	view.Accounts, view.LoginNotice = list.Accounts, m.loginNotice
+	view.Scheduling = list.Scheduling
 	view.UsagePanelRunning = m.panelRunning
 	if subject := reading.subject(); view.DetectionStatus == "ready" && list.bySubject(subject) == nil {
 		view.Detected = &claudeDetected{Identity: subject, Email: reading.email(), Organization: strings.TrimSpace(reading.Organization), Plan: reading.Plan, Quota: reading.Quota, CheckedAt: checked.Unix()}

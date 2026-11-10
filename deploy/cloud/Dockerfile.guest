@@ -4,11 +4,13 @@ ARG BASE_IMAGE=debian:13-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b
 FROM ${BASE_IMAGE}
 
 ENV container=docker
+COPY apt-bootstrap.sh /usr/local/lib/cage-apt-bootstrap
 COPY restore-apt-sources.sh /usr/local/lib/cage-image-restore-sources
 ARG DEBIAN_MIRROR=http://deb.debian.org
 RUN sed -i "s#http://deb.debian.org#${DEBIAN_MIRROR}#g" /etc/apt/sources.list.d/debian.sources \
     && printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
+    && sh /usr/local/lib/cage-apt-bootstrap \
     && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
        systemd systemd-sysv dbus dbus-user-session libpam-systemd sudo \

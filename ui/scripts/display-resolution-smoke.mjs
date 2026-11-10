@@ -11,10 +11,12 @@ page.setDefaultTimeout(10000);
 const output = process.env.CAGE_DISPLAY_REPORT || "/tmp/cage-display-resolution";
 const requests = [], actions = [];
 let failResize = false;
+let runningDensity; // Existing guests/servers omit the density field.
+state.settings.balanced_display = false;
 const desktop = { installed: true, running: true, managed: true, version: "fixture" };
 await page.route("**/api/claude-desktop**", async (route) => {
   const path = new URL(route.request().url()).pathname;
-  if (path.endsWith("/vnc-credentials")) return route.fulfill({ json: { password: "fixture" } });
+  if (path.endsWith("/vnc-credentials")) return route.fulfill({ json: { password: "fixture", display_scale: runningDensity } });
   if (path.endsWith("/resize")) {
     const size = route.request().postDataJSON();
     requests.push(size);
@@ -26,15 +28,15 @@ await page.route("**/api/claude-desktop**", async (route) => {
   actions.push(path);
   return route.fulfill({ json: { ok: true } });
 });
-async function matched(zoom = 1) {
-  await page.waitForFunction((zoom) => {
+async function matched(zoom = 1, density = runningDensity ?? 2) {
+  await page.waitForFunction(({ zoom, density }) => {
     const box = document.querySelector(".claude-desktop-view .remote-canvas"), canvas = box?.querySelector("canvas");
     if (!canvas) return false;
     const bounds = box.getBoundingClientRect(), shown = canvas.getBoundingClientRect();
-    return canvas.width === Math.floor(bounds.width * 2 / zoom) &&
-      canvas.height === Math.floor(bounds.height * 2 / zoom) &&
+    return canvas.width === Math.floor(bounds.width * density / zoom) &&
+      canvas.height === Math.floor(bounds.height * density / zoom) &&
       Math.abs(shown.width - bounds.width) < 2 && Math.abs(shown.height - bounds.height) < 2;
-  }, zoom, { timeout: 10000 });
+  }, { zoom, density }, { timeout: 10000 });
 }
 try {
   state.status.vm_running = state.status.ready = true;
@@ -87,6 +89,20 @@ try {
   await chooseInline(selector, "1");
   await matched();
   await page.setViewportSize({ width: 820, height: 558 });
+  await matched();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("switch", { name: /流畅画质/ }).check();
+  await page.getByRole("button", { name: "保存设置", exact: true }).click();
+  await page.getByRole("region", { name: "设置", exact: true }).waitFor({ state: "hidden" });
+  assert.equal(state.settings.balanced_display, true);
+  await matched(1, 2); // Reconnect to the application that was already running.
+  runningDensity = 1.5;
+  await page.reload();
+  await page.getByRole("button", { name: "Claude Desktop", exact: true }).click();
+  await matched();
+  await chooseInline(selector, "1.25");
+  await matched(1.25);
+  await chooseInline(selector, "1");
   await matched();
   assert.deepEqual(actions, [], "display changes must not restart the application");
   assert.deepEqual(errors, []);

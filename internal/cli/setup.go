@@ -15,6 +15,7 @@ import (
 	"github.com/sylvinus/agent-vm/internal/diagnostics"
 	"github.com/sylvinus/agent-vm/internal/env"
 	"github.com/sylvinus/agent-vm/internal/host"
+	"github.com/sylvinus/agent-vm/internal/hostimage"
 	"github.com/sylvinus/agent-vm/internal/state"
 	"github.com/sylvinus/agent-vm/internal/ui"
 	"github.com/sylvinus/agent-vm/internal/version"
@@ -452,6 +453,7 @@ func (e *app) buildBase(ctx context.Context, in install, disk, memory, cpus int)
 		win.Close()
 		if err != nil {
 			fmt.Fprintf(log, "%v\n", err)
+			fmt.Fprintf(e.io.Stderr, "Error: %s\n", diagnostics.Redact(err.Error()))
 			if f, ok := e.io.Stdout.(*os.File); ok && ui.IsTerminal(f) && os.Getenv(cage.ConfigEnv) == "" {
 				fmt.Fprint(e.io.Stderr, ui.Tail(logPath, 20))
 			}
@@ -464,14 +466,18 @@ func (e *app) buildBase(ctx context.Context, in install, disk, memory, cpus int)
 	fmt.Fprintln(e.io.Stdout, "Creating base VM...")
 	none := []vm.Mount{}
 	if !resume && !windowed(func(w io.Writer) error {
-		return b.Create(ctx, building, "template:debian-13", vm.Settings{CPUs: cpus, MemoryGiB: memory, DiskGiB: disk, Mounts: &none, NoContainerd: true}, w)
+		template, err := hostimage.LinuxTemplate(string(e.state))
+		if err != nil {
+			return err
+		}
+		return b.Create(ctx, building, template, vm.Settings{CPUs: cpus, MemoryGiB: memory, DiskGiB: disk, Mounts: &none, NoContainerd: true}, w)
 	}) {
 		fmt.Fprintf(e.io.Stderr, "Error: Failed to create base VM. Full log: %s\n", logPath)
 		return 1
 	}
 	(&start{app: e, ctx: ctx, name: building}).printResources()
 
-	fmt.Fprintln(e.io.Stdout, "Starting base VM (the first run downloads a Debian image)...")
+	fmt.Fprintln(e.io.Stdout, "Starting the selected base system...")
 	if !windowed(func(w io.Writer) error { return e.startVM(ctx, b, building, w) }) {
 		ha := filepath.Join(LimaHome(e.state), building, "ha.stderr.log")
 		fmt.Fprintf(e.io.Stderr, "Error: Failed to start base VM. Full log: %s\nLima's own log: %s\n", logPath, ha)
@@ -497,7 +503,13 @@ func (e *app) buildBase(ctx context.Context, in install, disk, memory, cpus int)
 
 	if user, ok := readRegular(e.state.Path("setup.sh")); ok {
 		fmt.Fprintf(e.io.Stdout, "Running custom setup from %s...\n", e.state.Path("setup.sh"))
-		code, err := b.Shell(ctx, building, vm.ShellOpts{Args: []string{"zsh", "-l"},
+		shell := "zsh"
+		if os.Getenv(cage.ConfigEnv) != "" {
+			// Cage owns this script and its Bash functions. A guest's default
+			// login shell must not change their syntax or reserved variables.
+			shell = "bash"
+		}
+		code, err := b.Shell(ctx, building, vm.ShellOpts{Args: []string{shell, "-l"},
 			Stdin: strings.NewReader(env.StripCR(user)), Stdout: e.io.Stdout, Stderr: e.io.Stderr})
 		if err != nil || code != 0 {
 			fmt.Fprintln(e.io.Stderr, "Error: Custom setup script failed.")
@@ -537,7 +549,7 @@ func cageInstallEnv() string {
 		if os.Getenv("CAGE_SETUP_PROGRESS") == "1" {
 			progress = "export CAGE_SETUP_PROGRESS=1\n"
 		}
-		return "set -e\nexport CLAUDE_CAGE=1\n" + progress + cage.DebianMirrorsScript + "\n" + cage.ToolInstallPrelude()
+		return "set -e\nexport CLAUDE_CAGE=1\n" + progress + cage.DebianPrepareScript + "\n" + cage.ToolInstallPrelude()
 	}
 	return ""
 }

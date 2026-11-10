@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 """Launch the official guest CLI and export only its subscription status fields."""
-import fcntl
+import runpy
 from datetime import datetime
 import hashlib
 import json
@@ -9,22 +9,42 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 
 
+if os.name == "nt":
+    platform_path = Path(__file__).with_name("windows_cli_platform.py")
+    if not platform_path.exists():
+        platform_path = Path(__file__).parent.parent / "workbench/windows_cli_platform.py"
+    _platform = runpy.run_path(platform_path)
+    fcntl = _platform["FileLock"]
+else:
+    import fcntl
+
 SHIM = "/usr/local/lib/cage-claude-bin"
-OPEN = "/usr/local/bin/cage-open"
+OPEN = "/usr/local/libexec/cage-cli/bin/cage-open" if sys.platform == "darwin" else "/usr/local/bin/cage-open"
 HELPER = "/usr/local/bin/cage-claude-account"
 DEFAULT = "default"
+
+
+def shared_root():
+    return Path(os.environ["CAGE_CLI_SHARED_ROOT"]) if os.name == "nt" else Path.home() / ".local/share/cage/claude-shared"
+
+
+class SharedResourceConflict(ValueError):
+    pass
 
 
 def profile(account_id):
     if account_id != DEFAULT and not re.fullmatch("[0-9a-f]{24}", account_id):
         raise ValueError("invalid account ID")
-    return Path.home() / ".local/share/cage/claude-accounts" / account_id
+    root = Path(os.environ["CAGE_CLI_ACCOUNT_ROOT"]) if os.name == "nt" else Path.home() / ".local/share/cage/claude-accounts"
+    return root / account_id
 
 
 def config_directory(base):
@@ -36,6 +56,8 @@ def cli_environment(base):
     # Executing the real binary must never recurse into the terminal's claude shim.
     path = [p for p in env.get("PATH", os.defpath).split(os.pathsep) if p and p != SHIM]
     env["PATH"] = os.pathsep.join([str(Path.home() / ".local/bin"), *path])
+    if sys.platform == "darwin" and Path("/usr/local/libexec/cage-cli/bin/claude").is_file():
+        env["PATH"] = "/usr/local/libexec/cage-cli/bin:/usr/local/bin:" + env["PATH"]
     if base.name == DEFAULT:
         # Let Claude resolve its normal ~/.claude.json and ~/.claude itself.
         # Preserve provider variables: an API-authenticated shell is not a
@@ -49,9 +71,9 @@ def cli_environment(base):
     return env
 
 
-def identity(binary, env, cwd, settings=(), timeout=10):
+def identity(binary, env, cwd, settings=(), timeout=10, pass_fds=()):
     result = subprocess.run([binary, *settings, "auth", "status"], cwd=cwd, env=env, timeout=timeout,
-                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, pass_fds=pass_fds)
     # Exit code 1 with JSON is the CLI's documented logged-out response. Any
     # other failure (including missing JSON) must not sign a known user out.
     data = json.loads(result.stdout)
@@ -287,8 +309,15 @@ def query_usage(binary, env, base, expected):
 def has_status_line(base):
     # Preserve existing user, project and managed status lines, including an
     # explicit disable. If a settings file is unreadable, defer to Claude.
-    paths = [config_directory(base) / "settings.json", Path("/etc/claude-code/managed-settings.json")]
-    paths.extend(Path("/etc/claude-code/managed-settings.d").glob("*.json"))
+    if os.name == "nt":
+        policy = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "ClaudeCode"
+    elif sys.platform == "darwin":
+        policy = Path("/Library/Application Support/ClaudeCode")
+    else:
+        policy = Path("/etc/claude-code")
+    paths = [config_directory(base) / "settings.json", policy / "managed-settings.json"]
+    if os.name != "nt":
+        paths.extend((policy / "managed-settings.d").glob("*.json"))
     for folder in (Path.cwd(), *Path.cwd().parents):
         paths += [folder / ".claude/settings.json", folder / ".claude/settings.local.json"]
     for path in paths:
@@ -318,7 +347,197 @@ def settings_flags(args):
     return flags
 
 
-def main(args):
+def shared_profile_resources(base):
+    """Share local customizations; credentials, synced skills and history stay private."""
+    config = config_directory(base)
+    common = Path.home() / ".claude"
+    common.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if config == common:
+        return
+    lock_dir = shared_root()
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (lock_dir / "resources.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        conflict = "账号的技能或指令与共用资料同名冲突，请先核对 ~/.claude 中的对应文件；原文件已保留"
+        def check(local, shared):
+            if (local.is_symlink() or os.name == "nt" and local.is_junction()):
+                if local.resolve() != shared.resolve():
+                    raise SharedResourceConflict(conflict)
+            elif local.exists() and shared.exists():
+                if local.is_dir() and shared.is_dir():
+                    for child in local.iterdir():
+                        check(child, shared / child.name)
+                elif not (local.is_file() and shared.is_file() and local.read_bytes() == shared.read_bytes()):
+                    raise SharedResourceConflict(conflict)
+        def merge(local, shared):
+            if (local.is_symlink() or os.name == "nt" and local.is_junction()):
+                if local.resolve() == shared.resolve():
+                    return
+                raise SharedResourceConflict(conflict)
+            if local.exists():
+                if local.is_dir() and shared.is_dir():
+                    for child in list(local.iterdir()):
+                        merge(child, shared / child.name)
+                        if child.is_symlink():
+                            child.unlink()
+                    local.rmdir()
+                elif not shared.exists():
+                    shared.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    local.rename(shared)
+                elif local.is_file() and shared.is_file() and local.read_bytes() == shared.read_bytes():
+                    # Keep a recoverable copy before replacing a local resource.
+                    backup = lock_dir / "backups" / base.name / local.relative_to(config)
+                    backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    if not backup.exists():
+                        shutil.copy2(local, backup)
+                    local.unlink()
+                else:
+                    # Never choose which conflicting instruction or skill wins.
+                    raise SharedResourceConflict(conflict)
+            if not shared.exists():
+                if local.name in ("CLAUDE.md", "AGENTS.md"):
+                    shared.touch(mode=0o600)
+                else:
+                    shared.mkdir(mode=0o700, parents=True, exist_ok=True)
+            local.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            if os.name == "nt":
+                _platform["resource_link"](local, shared)
+            else:
+                local.symlink_to(shared, target_is_directory=shared.is_dir())
+        # claude.ai downloads skills into skills/synced. Keep that subtree
+        # account-specific; link only locally installed skill entries.
+        local, shared = config / "skills", common / "skills"
+        local.mkdir(mode=0o700, parents=True, exist_ok=True)
+        shared.mkdir(mode=0o700, parents=True, exist_ok=True)
+        names = {p.name for folder in (local, shared) for p in folder.iterdir()} - {"synced"}
+        resources = [(config / name, common / name) for name in
+                     ("commands", "agents", "rules", "agent-memory", "CLAUDE.md", "AGENTS.md")]
+        resources += [(local / name, shared / name) for name in sorted(names)]
+        # Validate every resource before moving any of them. A late conflict
+        # must leave the account's existing directory layout usable.
+        for source, destination in resources:
+            check(source, destination)
+        for source, destination in resources:
+            if source.exists() and not source.is_symlink():
+                backup = lock_dir / "backups" / base.name / source.relative_to(config)
+                if backup.exists():
+                    backup = backup.with_name(backup.name + "-" + str(time.time_ns()))
+                backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if source.is_dir():
+                    shutil.copytree(source, backup, symlinks=True)
+                else:
+                    shutil.copy2(source, backup)
+            merge(source, destination)
+
+
+def shared_launch_arguments(base, args, settings_fd=None):
+    """Apply a stable project memory location without sharing auth/settings files."""
+    lock_dir = shared_root()
+    lock_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with (lock_dir / "resources.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return shared_launch_arguments_locked(base, args, settings_fd)
+
+
+def shared_launch_arguments_locked(base, args, settings_fd):
+    directory = Path.cwd().resolve()
+    try:
+        git = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                             cwd=directory, capture_output=True, text=True, timeout=2)
+        if git.returncode == 0:
+            common_git = Path(git.stdout.strip())
+            if common_git.name == ".git":
+                directory = common_git.parent.resolve()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    key = re.sub(r"[^a-zA-Z0-9]", "-", str(directory))
+    if len(key) > 180:
+        key = key[:140] + "-" + hashlib.sha256(str(directory).encode()).hexdigest()[:32]
+    memory = Path.home() / ".claude/projects" / key / "memory"
+    own_memory = config_directory(base) / "projects" / key / "memory"
+    memory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # Retain pre-existing account notes. Colliding files remain in their
+    # original directory and block automatic consolidation until reviewed.
+    if own_memory != memory and own_memory.exists() and not (own_memory.is_symlink() or os.name == "nt" and own_memory.is_junction()):
+        sources = [source for source in own_memory.rglob("*") if source.is_file()]
+        for source in sources:
+            destination = memory / source.relative_to(own_memory)
+            if destination.exists() and (not destination.is_file() or destination.read_bytes() != source.read_bytes()):
+                raise SharedResourceConflict("账号的项目记忆与共用记忆冲突，原记忆已保留，请先核对")
+        for source in sources:
+            if source.is_file():
+                destination = memory / source.relative_to(own_memory)
+                if destination.exists() and destination.read_bytes() != source.read_bytes():
+                    raise SharedResourceConflict("账号的项目记忆与共用记忆冲突，原记忆已保留，请先核对")
+                destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+                if not destination.exists():
+                    shutil.copy2(source, destination)
+        backup = shared_root() / "backups" / base.name / "projects" / key / "memory"
+        backup.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if backup.exists():
+            backup = backup.with_name(backup.name + "-" + str(time.time_ns()))
+        own_memory.rename(backup)
+        if os.name == "nt":
+            _platform["resource_link"](own_memory, memory)
+        else:
+            own_memory.symlink_to(memory, target_is_directory=True)
+    settings = {"autoMemoryDirectory": str(memory)}
+    # Only local behavior is shared. Never copy env, apiKeyHelper, login/org
+    # constraints, OAuth metadata, or account-synced remote configuration.
+    common_settings = json_file(Path.home() / ".claude/settings.json")
+    shared_keys = {"model", "permissions", "hooks", "statusLine", "attribution", "language",
+                   "effortLevel", "alwaysThinkingEnabled", "includeCoAuthoredBy", "respectGitignore",
+                   "spinnerTipsEnabled", "outputStyle", "disableAllHooks", "includeGitInstructions",
+                   "theme", "skipDangerousModePermissionPrompt", "tui", "autoMemoryEnabled"}
+    if isinstance(common_settings, dict):
+        settings.update({key: value for key, value in common_settings.items() if key in shared_keys})
+    # Respect an explicit memory location in existing user/project settings.
+    paths = [Path.home() / ".claude/settings.json", config_directory(base) / "settings.json"]
+    for parent in reversed((Path.cwd(), *Path.cwd().parents)):
+        paths += [parent / ".claude/settings.json", parent / ".claude/settings.local.json"]
+    for path in paths:
+        stored = json_file(path)
+        if path != Path.home() / ".claude/settings.json" and isinstance(stored, dict):
+            # Let the CLI's normal profile/project precedence decide these
+            # values. A shared default must not turn into a command-line override.
+            for key in shared_keys & stored.keys():
+                settings.pop(key, None)
+        if isinstance(stored, dict) and "autoMemoryDirectory" in stored:
+            settings["autoMemoryDirectory"] = stored["autoMemoryDirectory"]
+    result, iterator = [], iter(args)
+    for arg in iterator:
+        if arg == "--":
+            result += [arg, *iterator]
+            break
+        if arg == "--settings" or arg.startswith("--settings="):
+            value = next(iterator) if arg == "--settings" else arg.split("=", 1)[1]
+            supplied = json.loads(value) if value.lstrip().startswith("{") else json.loads(Path(value).read_text())
+            settings.update(supplied)
+        else:
+            result.append(arg)
+    data = json.dumps(settings, separators=(",", ":")).encode()
+    if settings_fd is not None:
+        # Mobile launch deliberately keeps settings in an anonymous file.
+        # Sharing local defaults must not persist its provider material.
+        with os.fdopen(os.dup(settings_fd), "r+b") as snapshot:
+            snapshot.seek(0)
+            snapshot.truncate()
+            snapshot.write(data)
+            snapshot.flush()
+            snapshot.seek(0)
+        return ["--settings", "/dev/fd/" + str(settings_fd), *result]
+    folder = base / "launch-settings"
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = folder / (hashlib.sha256(data).hexdigest() + ".json")
+    if not path.exists():
+        with tempfile.NamedTemporaryFile(dir=folder, delete=False) as stream:
+            stream.write(data)
+            temporary = stream.name
+        os.replace(temporary, path)
+    return ["--settings", str(path), *result]
+
+
+def main(args, *, mobile_settings_fd=None, verify_mobile=None):
     mode, account_id, *rest = args
     if mode == "quotas":
         result = {}
@@ -348,7 +567,7 @@ def main(args):
                 print(json.dumps(changed_identity() if mode == "usage" else {"logged_in": False}))
                 return 0
             raise ValueError("not the default subscription configuration")
-    binary = shutil.which("claude", path=env["PATH"])
+    binary = os.environ.get("CAGE_CLI_BINARY") if os.name == "nt" else shutil.which("claude", path=env["PATH"])
     if not binary:
         raise ValueError("Claude is not installed")
     if mode == "usage":
@@ -371,42 +590,84 @@ def main(args):
         print(json.dumps(summary))
         return 0
     if mode == "login":
-        env.update(BROWSER=OPEN, CAGE_CLAUDE_LOGIN=account_id)
+        env.update(CAGE_CLAUDE_LOGIN=account_id)
+        if os.name != "nt":
+            env["BROWSER"] = OPEN
         # Set the handler before spawning so SSH/window closure also disposes
         # the ephemeral browser and its cookies.
         def interrupted(_signum, _frame):
             raise KeyboardInterrupt()
-        signal.signal(signal.SIGHUP, interrupted)
+        if hasattr(signal, "SIGHUP"):
+            signal.signal(signal.SIGHUP, interrupted)
         signal.signal(signal.SIGTERM, interrupted)
         try:
             (base / "quota.json").unlink(missing_ok=True)
-            return subprocess.call([binary, "auth", "login", "--claudeai"], cwd=Path.home(), env=env)
+            return subprocess.call([binary, "auth", "login", *([] if os.name == "nt" else ["--claudeai"])], cwd=Path.home(), env=env)
         finally:
-            subprocess.run([OPEN, "--finish-login"], env=env, timeout=8, check=False,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if os.name != "nt":
+                subprocess.run([OPEN, "--finish-login"], env=env, timeout=8, check=False,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if mode == "run":
+        shared_profile_resources(base)
+        if not settings_flags(rest) and not has_status_line(base):
+            rest = ["--settings", json.dumps({"statusLine": {"type": "command", "command": f"{HELPER} statusline {account_id}"}}), *rest]
+        rest = shared_launch_arguments(base, rest, mobile_settings_fd)
         # Profile/project settings can override inherited authentication. Check
         # the actual CLI method in the project before launching the conversation.
         options = settings_flags(rest)
-        if not expected or subject(identity(binary, env, Path.cwd(), options)) != expected:
+        # A mobile turn verifies and executes with the same anonymous settings
+        # snapshot. Keep its descriptor open across the auth-status child.
+        pass_fds = () if mobile_settings_fd is None else (mobile_settings_fd,)
+        reading = identity(binary, env, Path.cwd(), options, pass_fds=pass_fds) if expected else None
+        if not expected or subject(reading) != expected:
             print("此项目未使用所选 Claude 订阅。请检查项目配置和账号登录状态。", file=sys.stderr)
             return 1
-        flags = []
-        if not options and not has_status_line(base):
-            settings = {"statusLine": {"type": "command", "command": f"{HELPER} statusline {account_id}"}}
-            flags = ["--settings", json.dumps(settings, separators=(",", ":"))]
+        if mobile_settings_fd is not None:
+            verify_mobile(reading)
+            os.lseek(mobile_settings_fd, 0, os.SEEK_SET)
         # The private profile is ready. Claude and its tools must create files
         # in the shared project using the user's usual umask.
         os.umask(original_umask)
-        os.execve(binary, [binary, *flags, *rest], env)
+        if os.name == "nt":
+            return subprocess.call([binary, *rest], env=env)
+        os.execve(binary, [binary, *rest], env)
     raise ValueError("unknown operation")
+
+
+def macos_open(args):
+    login = os.environ.get("CAGE_CLAUDE_LOGIN", "")
+    if len(args) != 1 or not re.fullmatch("[0-9a-f]{24}", login):
+        return 2
+    finish = args[0] == "--finish-login"
+    data = {"action": "login-finish" if finish else "login-open", "login": login}
+    if not finish:
+        from urllib.parse import urlsplit
+        url = urlsplit(args[0])
+        if len(args[0]) > 8192 or url.scheme != "https" or url.username or url.password or url.hostname not in (
+                "claude.ai", "claude.com", "console.anthropic.com", "platform.claude.com", "platform.anthropic.com"):
+            return 2
+        data["url"] = args[0]
+    address = Path.home() / "Library/Application Support/Cage/Login/open.sock"
+    owner = address.lstat()
+    if not stat.S_ISSOCK(owner.st_mode) or owner.st_uid != os.getuid() or owner.st_mode & 0o077:
+        return 1
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(12)
+        client.connect(str(address))
+        client.sendall(json.dumps(data).encode())
+        client.shutdown(socket.SHUT_WR)
+        with client.makefile("rb") as reply:
+            return 0 if reply.read(4) == b"OK" else 1
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main(sys.argv[1:]))
+        sys.exit(macos_open(sys.argv[1:]) if sys.platform == "darwin" and Path(sys.argv[0]).name == "cage-open" else main(sys.argv[1:]))
     except KeyboardInterrupt:
         sys.exit(130)
+    except SharedResourceConflict as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(1)
     except (OSError, ValueError, subprocess.SubprocessError, TypeError):
         # No raw CLI output, paths, credentials or callback URLs go to logs.
         print("无法读取 Claude 订阅状态或启动官方 CLI，请检查环境组件与登录状态。", file=sys.stderr)

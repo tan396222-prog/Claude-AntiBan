@@ -19,7 +19,7 @@
     "id": "first-start",
     "file": "first-start.jpg",
     "title": "首次启动的工作台与三步引导",
-    "chapter": "installation",
+    "chapter": "workbench",
     "version": "0.1.6-alpha-preview（开发构建）",
     "platform": "macOS 原生应用",
     "capturedAt": "2026-11-07",
@@ -370,5 +370,35 @@
     "height": 875,
     "sha256": "0f59b6b00a37470c699c115c68f585ce489c84d937c0d028511d03a699d6b38b",
     "source": "真实云端运行画面；未登录 Claude；历史验收未记录该图对应的 Cage 版本，不按当前版本补标"
+  },
+  {
+    "id": "host-system-clone",
+    "file": "host-system-clone.png",
+    "title": "本机系统匹配的版本、材料与空间预览",
+    "chapter": "guest-systems",
+    "source": "独立 macOS 首装验收的实际 Cage 工作台；所示构建使用“克隆本机系统”名称，当前入口为“自动匹配本机系统版本”；未复制主机个人资料",
+    "version": "0.1.6-alpha-preview（开发构建）",
+    "platform": "macOS 原生应用 · macOS 26.5 客机",
+    "capturedAt": "2026-11-09",
+    "width": 1280,
+    "height": 720,
+    "sha256": "98d2e6c29aac684e17dc9c193665aff34c8ab077b5dffc449e33b76b2b5c6da1",
+    "buildRevision": "c962e73470f6701f4cb9aa9c22334e5cef11602e",
+    "workingTreeModified": true
+  },
+  {
+    "id": "macos-first-permissions",
+    "file": "macos-first-permissions.png",
+    "title": "Mac 客机首次权限引导与文件系统扩展设置",
+    "chapter": "guest-systems",
+    "source": "独立 macOS 客机的实际系统设置与 Cage 权限引导；画面显示授权已通过，未登录 Claude",
+    "version": "0.1.6-alpha-preview（开发构建）",
+    "platform": "macOS 原生应用 · macOS 26.5 客机",
+    "capturedAt": "2026-11-09",
+    "width": 1280,
+    "height": 720,
+    "sha256": "10b033458262f8add66e26f0b7f50222dbf9b165396043c8ff55a81a80ff2bc1",
+    "buildRevision": "c962e73470f6701f4cb9aa9c22334e5cef11602e",
+    "workingTreeModified": true
   }
 ]

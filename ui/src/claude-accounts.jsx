@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Pencil, Plus, RefreshCw, TerminalSquare, Timer } from "lucide-react";
 import { api } from "./api";
+import { InlineSelect } from "./inline-select";
 import crabIcon from "./claude-account-crab.svg";
 import "./claude-accounts.css";
 
@@ -36,7 +37,7 @@ export function useClaudeAccounts() {
   return { accounts: registry?.accounts ?? null, detected: registry?.detected,
     detectionStatus: registry?.detection_status, detectionError: registry?.detection_error,
     usageRunning: registry?.usage_panel_running, usageUnavailable: registry?.usage_unavailable_reason,
-    loginNotice: registry?.login_notice, error, load };
+    scheduling: registry?.scheduling || {mode:"balanced",switch_policy:"ask"}, loginNotice: registry?.login_notice, error, load };
 }
 
 const statusLabels = {
@@ -47,6 +48,17 @@ const localTimestamp = new Intl.DateTimeFormat(undefined, {
   month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
 });
 const timeLabel = (seconds) => localTimestamp.format(seconds * 1000);
+
+const usageUpdatedAt = (profile) => Math.max(profile.quota?.five_hour?.observed_at || 0,
+  profile.quota?.seven_day?.observed_at || 0) || profile.usage_checked_at || 0;
+const ageUnit = (elapsed) => elapsed < 3600 ? 60 : elapsed < 86400 ? 3600 : 86400;
+function relativeTimeLabel(seconds, now) {
+  const elapsed = Math.max(0, now - seconds);
+  if (elapsed < 60) return "刚刚";
+  if (elapsed < 3600) return `${Math.floor(elapsed / 60)}分钟前`;
+  if (elapsed < 86400) return `${Math.floor(elapsed / 3600)}小时前`;
+  return `${Math.floor(elapsed / 86400)}天前`;
+}
 
 const QuotaTime = createContext(0);
 
@@ -64,6 +76,12 @@ function QuotaClock({ accounts, children }) {
       setNow(seconds);
       let delay = Infinity;
       for (const account of accounts || []) {
+        const updated = usageUpdatedAt(account);
+        if (updated > 0) {
+          const elapsed = Math.max(0, seconds - updated);
+          const unit = ageUnit(elapsed);
+          delay = Math.min(delay, unit - elapsed % unit);
+        }
         for (const window of [account.quota?.five_hour, account.quota?.seven_day]) {
           const left = window?.resets_at - seconds;
           if (left > 0) delay = Math.min(delay, left <= 60 ? 1 : (left - 1) % 60 + 1);
@@ -160,11 +178,12 @@ function ProfileUsage({ quota, state }) {
 }
 
 function UsageNote({ profile, state }) {
-  const latestReading = Math.max(profile.quota?.five_hour?.observed_at || 0, profile.quota?.seven_day?.observed_at || 0);
+  const now = useContext(QuotaTime);
+  const updated = usageUpdatedAt(profile);
   return <small className="claude-quota-age">
     <span>{usageLabels[state] || "暂无额度信息"}</span>
-    {profile.usage_checked_at > 0 && <span>上次查询 {timeLabel(profile.usage_checked_at)}</span>}
-    {latestReading > 0 && <span>最近读数 {timeLabel(latestReading)}</span>}
+    {updated > 0 && <span>最近更新 <time dateTime={new Date(updated * 1000).toISOString()} title={timeLabel(updated)}>
+      {relativeTimeLabel(updated, now)}</time></span>}
   </small>;
 }
 
@@ -197,6 +216,7 @@ function DetectedProfile({ profile, usageEnvironment, busy, join, perform, chang
 function ProfileCard({ profile, environment, usageEnvironment, busy, active, defaultActive, perform, change, login, cancelDraft }) {
   const [renaming, setRenaming] = useState(false);
   const [label, setLabel] = useState("");
+  const [group, setGroup] = useState(profile.handoff_group || "");
   const displayName = profile.label || profile.email;
   const fromTerminal = profile.source === "default";
   const savedLabel = label.trim() || profile.email;
@@ -233,6 +253,10 @@ function ProfileCard({ profile, environment, usageEnvironment, busy, active, def
       </label>
     </div>
     <ProfileUsage quota={profile.quota} state={usage.state} />
+    <form className="claude-handoff-group" onSubmit={event => { event.preventDefault(); perform(() => change({action:"update",id:profile.id,handoff_group:group})); }}>
+      <label>接续分组<input aria-label={`${displayName} 的接续分组`} value={group} maxLength={32} placeholder="未分组，不跨账号接续" onChange={event => setGroup(event.target.value)} /></label>
+      <button disabled={busy || group === (profile.handoff_group || "")}>保存分组</button>
+    </form>
     {active > 0 && <p className="claude-profile-note">{active} 个终端仍在运行{!fromTerminal && "，关闭后可重新登录"}</p>}
     {!fromTerminal && defaultActive > 0 && <p className="field-help">
       其中 {defaultActive} 个工作终端仍使用普通终端的登录。若普通终端已换号，请重新打开这些会话确认身份。
@@ -327,6 +351,25 @@ export function ClaudeAccountsPanel({ store, running, environmentBusy, tabs, log
       <h3>Claude 账号</h3>
       <p>将普通终端已登录的订阅加入调度，或单独登录一个新账号。新建 Claude 终端时自动分配。</p>
     </div>
+    <details className="claude-scheduling">
+      <summary>调度设置 · {store.scheduling.mode === "sequential" ? "顺序优先" : "均衡分配"}</summary>
+      <label>新会话分配<InlineSelect aria-label="新会话分配" value={store.scheduling.mode} disabled={busy}
+        onValueChange={mode => perform(() => load({action:"scheduling",scheduling:{...store.scheduling,mode}}))}>
+        <option value="balanced">均衡分配</option><option value="sequential">按列表顺序优先</option>
+      </InlineSelect></label>
+      <label>新会话切换授权<InlineSelect aria-label="新会话切换授权" value={store.scheduling.switch_policy} disabled={busy}
+        onValueChange={switch_policy => perform(() => load({action:"scheduling",scheduling:{...store.scheduling,switch_policy}}))}>
+        <option value="ask">每次询问</option><option value="allow">额度耗尽后自动接续</option><option value="wait">始终等待原账号</option>
+      </InlineSelect></label>
+      <p className="field-help">已有会话保持原账号和授权。自动接续只在限额已确认、原任务可安全停止且目标账号属于同一接续分组时进行；跨账号可能重建缓存。</p>
+      {store.scheduling.mode === "sequential" && accounts?.length > 1 && <div className="claude-account-order" aria-label="账号优先顺序">
+        {accounts.map((profile,index) => <div key={profile.id}><span>{index+1}. {profile.label || profile.email}</span>
+          <button disabled={busy || index===0} aria-label={`提高 ${profile.label} 的优先级`} onClick={() => {
+            const order=accounts.map(a=>a.id); [order[index-1],order[index]]=[order[index],order[index-1]];
+            perform(() => load({action:"scheduling",scheduling:store.scheduling,order}));
+          }}>上移</button></div>)}
+      </div>}
+    </details>
     <div className="claude-add-profile">
       <button className="primary" disabled={busy || environmentBusy || !!environment}
         onClick={() => perform(() => login())}><Plus size={16} />登录新账号</button>

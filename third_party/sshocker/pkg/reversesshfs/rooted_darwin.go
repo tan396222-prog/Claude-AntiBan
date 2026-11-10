@@ -37,3 +37,24 @@ func fchmodatNoFollow(dirfd int, base string, mode uint32) error {
 	}
 	return unix.Fchmodat(dirfd, base, mode, unix.AT_SYMLINK_NOFOLLOW)
 }
+
+// Open each component without following links and keep the client on the
+// selected volume. Truncation is deferred until the descriptor is checked.
+func cloudOpenat(fd int, name string, flags int, mode uint32) (int, error) {
+	next, err := unix.Openat(fd, name, flags, mode)
+	if err != nil {
+		return -1, err
+	}
+	var parent, child unix.Stat_t
+	if err = unix.Fstat(fd, &parent); err == nil {
+		err = unix.Fstat(next, &child)
+	}
+	if err == nil && parent.Dev != child.Dev {
+		err = unix.EXDEV
+	}
+	if err != nil {
+		unix.Close(next)
+		return -1, err
+	}
+	return next, nil
+}

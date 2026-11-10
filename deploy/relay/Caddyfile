@@ -1,0 +1,22 @@
+{
+	admin off
+	log default {
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers delete
+			}
+		}
+	}
+}
+
+{$RELAY_DOMAIN} {
+	@relay path /healthz /v1/rooms /v1/rooms/* /v1/invitation
+	handle @relay {
+		reverse_proxy relay:8787
+	}
+	handle {
+		respond 404
+	}
+}

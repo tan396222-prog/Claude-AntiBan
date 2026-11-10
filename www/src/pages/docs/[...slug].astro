@@ -45,7 +45,7 @@ const canonical = new URL(guideURL(page.slug), Astro.site);
         <nav aria-label="手机文档目录">{guideGroups.map(group => <section><h2>{group}</h2>{guidePages.filter(item => item.group === group).map(item => <a href={guideURL(item.slug)} aria-current={item.slug === page.slug ? 'page' : undefined}>{item.title}</a>)}</section>)}</nav>
       </details>
       <nav class="guide-desktop-menu" aria-label="全部章节">{guideGroups.map(group => <section><h2>{group}</h2>{guidePages.filter(item => item.group === group).map(item => <a href={guideURL(item.slug)} aria-current={item.slug === page.slug ? 'page' : undefined}>{item.title}</a>)}</section>)}</nav>
-      <p class="guide-sidebar-note">覆盖桌面版与开发中的远程能力。<br />功能是否可用，请结合所用版本。</p>
+      <p class="guide-sidebar-note">选择熟悉的系统，在同一个工作台里开发。<br />本机、云端与手机各有指南。</p>
     </aside>
     <main id="article" class="guide-main" tabindex="-1">
       <section id="search-results" class="guide-results" aria-labelledby="search-title" hidden><div class="search-heading"><h2 id="search-title">搜索结果</h2><button id="close-search" type="button">返回正文</button></div><p id="search-status" role="status" aria-live="polite"></p><ul id="search-list"></ul></section>

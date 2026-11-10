@@ -34,7 +34,7 @@ func (s *Server) startMonitors() {
 		return
 	}
 	ctx := s.lifetimeContextLocked()
-	s.monitors.Add(3)
+	s.monitors.Add(4)
 	s.mu.Unlock()
 	go func() {
 		defer s.monitors.Done()
@@ -57,7 +57,28 @@ func (s *Server) startMonitors() {
 	}()
 	go func() {
 		defer s.monitors.Done()
-		s.monitorNetwork(ctx)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for ctx.Err() == nil {
+			// Long-running maintenance jobs own their own monitor and stop it
+			// before changing guest components. Other jobs cancel observation.
+			if !s.busy() {
+				s.monitorSafety()
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	go func() {
+		defer s.monitors.Done()
+		// macOS performs both probes from the same tick. Its periodic SSH
+		// attestation otherwise races this loop for the lifecycle lock.
+		if s.macosGuest == nil && (s.windowsGuest == nil || s.windowsGuest.NetworkPairingFile != "") {
+			s.monitorNetwork(ctx)
+		}
 	}()
 }
 
@@ -113,6 +134,11 @@ func (s *Server) closeService() error {
 		s.op.Lock()
 		defer s.op.Unlock()
 		s.closeProjectShares()
+		s.closeWindowsBrowser()
+		if s.windowsGuest != nil {
+			s.closeErr = s.closeProxyGate("控制服务正在退出，外网保持关闭")
+		}
+		s.closeWindowsNetwork()
 		s.mu.Lock()
 		browser := s.browserControl
 		s.ready = false
@@ -121,7 +147,10 @@ func (s *Server) closeService() error {
 		if browser != nil {
 			browser.close()
 		}
-		s.closeErr = errors.Join(s.closeProxyGate("控制服务正在退出，外网保持关闭"), managedproxy.Stop(s.profile))
+		if s.windowsGuest == nil {
+			s.closeErr = s.closeProxyGate("控制服务正在退出，外网保持关闭")
+		}
+		s.closeErr = errors.Join(s.closeErr, managedproxy.Stop(s.profile))
 		if s.controlPublished {
 			if err := os.Remove(filepath.Join(s.profile, "control.json")); err != nil && !os.IsNotExist(err) {
 				s.closeErr = errors.Join(s.closeErr, err)

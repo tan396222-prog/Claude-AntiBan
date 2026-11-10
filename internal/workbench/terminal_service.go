@@ -25,6 +25,8 @@ type terminalRequest struct {
 	Workspace       string `json:"workspace"`
 	Kind            string `json:"kind"`
 	ClaudeAccountID string `json:"claude_account_id"`
+	sharedID        string
+	requestContext  context.Context
 }
 
 // terminalManager owns host PTYs; subscriptions only borrow their output. The
@@ -39,12 +41,16 @@ type terminalManager struct {
 }
 
 func (m *terminalManager) startSession(cmd *exec.Cmd, workspace, kind string, selection claudeSelection, finished func()) (*terminalSession, error) {
+	return m.startSessionWithPTY(cmd, workspace, kind, selection, finished, func() (terminalPTY, error) { return startTerminal(cmd, 100, 30) })
+}
+
+func (m *terminalManager) startSessionWithPTY(cmd *exec.Cmd, workspace, kind string, selection claudeSelection, finished func(), start func() (terminalPTY, error)) (*terminalSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.admissionErrorLocked(); err != nil {
 		return nil, err
 	}
-	file, err := startTerminal(cmd, 100, 30)
+	file, err := start()
 	if err != nil {
 		return nil, errTerminalStart
 	}
@@ -58,6 +64,9 @@ func (m *terminalManager) startSession(cmd *exec.Cmd, workspace, kind string, se
 	session := newTerminalSession(file)
 	session.id, session.title, session.workspace, session.cmd = randomToken()[:16], title, workspace, cmd
 	session.kind, session.claudeAccountID = kind, selection.ID
+	if kind == "claude-login" {
+		session.loginGuestID = selection.GuestID
+	}
 	if selection.GuestID == "default" {
 		session.claudeAccountSource = "default"
 	} else if selection.ID != "" {
@@ -131,6 +140,20 @@ func (m *terminalManager) get(id string) *terminalSession {
 	return m.sessions[id]
 }
 
+func (m *terminalManager) forConversation(connection string) *terminalSession {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, session := range m.sessions {
+		session.mu.Lock()
+		matches := session.connectionID == connection && !session.closed
+		session.mu.Unlock()
+		if matches {
+			return session
+		}
+	}
+	return nil
+}
+
 // Reattaching a repeated login request must not create a second OAuth flow.
 // A profile can serve many normal terminals or a single exclusive login.
 func (m *terminalManager) existingClaudeLogin(id string, login bool) (*terminalSession, error) {
@@ -197,6 +220,38 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 		return nil, errTerminalBusy
 	}
 	defer s.op.Unlock()
+	return s.createTerminalLocked(input)
+}
+
+// Caller holds the environment operation lock through PTY publication.
+func (s *Server) createTerminalLocked(input terminalRequest) (*terminalSession, error) {
+	if s.windowsGuest != nil {
+		return s.createWindowsTerminal(input)
+	}
+	var sharedRecord *mobileRecord
+	if input.sharedID != "" {
+		s.mobileCLI.mu.Lock()
+		record, err := s.mobileCLI.record(s.profile, input.sharedID)
+		s.mobileCLI.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		sharedRecord = record
+		if record.Switch != nil && record.Switch.Phase == "preparing" {
+			return nil, errors.New("账号交接尚未完成，请先重试或取消交接")
+		}
+		if record.Archived || record.Deleted {
+			return nil, errors.New("此会话已归档或删除，请先从已归档会话恢复")
+		}
+		// The guest can be unreadable or not yet started while its host PTY
+		// already owns this conversation. A stale snapshot cannot start a copy.
+		if existing := s.terminals.get(record.TerminalID); existing != nil && existing.ownsConversation() {
+			return existing, nil
+		}
+		if existing := s.terminals.get(record.TerminalID); existing != nil && existing.summary()["closed"] == true {
+			s.terminals.remove(record.TerminalID)
+		}
+	}
 	s.mu.Lock()
 	closing := s.closing
 	componentUpdate := s.guestUpdateRequired
@@ -204,6 +259,20 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 	s.mu.Unlock()
 	if closing {
 		return nil, errTerminalsClosed
+	}
+	if sharedRecord != nil && (!sharedCLILauncher(command) || sharedRecord.Launcher != "" && sharedRecord.Launcher != command) {
+		return nil, errors.New("主机启动命令与原会话不一致，请恢复原配置后重试")
+	}
+	if s.macosGuest != nil {
+		if input.Kind == "claude" && !sharedCLILauncher(command) {
+			return nil, errors.New("macOS 客机支持 claude 或 ccs 配置名启动命令")
+		}
+		s.mu.Lock()
+		ready := s.ready
+		s.mu.Unlock()
+		if !ready {
+			return nil, errTerminalNotReady
+		}
 	}
 	if !s.vmRunning() || s.busy() {
 		return nil, errTerminalNotReady
@@ -227,17 +296,31 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 	workspace := s.workspace()
 	var err error
 	if input.Kind != "claude-login" {
-		workspace, err = s.connectProject(input.Workspace, false)
+		if s.macOSLegacyWorkspace(sharedRecord) != "" {
+			workspace, err = s.projectWorkspace(sharedRecord.Workspace)
+		} else {
+			workspace, err = s.connectProject(input.Workspace, false)
+		}
 		if err != nil {
 			return nil, err
 		}
 	}
-	script := terminalScript(guestPath(workspace), input.Kind, command)
+	script := terminalScript(s.cliWorkspace(workspace), input.Kind, command)
+	if s.macosGuest != nil {
+		script = `cd -- "$HOME" && exec env TERM=xterm-256color COLORTERM=truecolor /bin/zsh -l`
+		if input.Kind != "claude-login" {
+			script = "exec /usr/local/libexec/cage-macos-terminal " + shellescape.Quote(macOSProjectPath(s.macosGuest.User, workspace))
+		}
+	}
 	var selection claudeSelection
 	var finished func()
 	if managed {
 		login := input.Kind == "claude-login"
-		selection, err = s.selectClaudeAccount(input.ClaudeAccountID, login, workspace)
+		if sharedRecord != nil && sharedRecord.Terminal {
+			selection = sharedRecord.Account
+		} else {
+			selection, err = s.selectTerminalClaudeAccount(command, input.ClaudeAccountID, login, workspace)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -248,15 +331,25 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 			if !validClaudeID(selection.ID) || !validClaudeGuestID(selection.GuestID) || (login && selection.GuestID == "default") {
 				return nil, errors.New("Claude 账号 ID 无效")
 			}
-
+			if login && s.mobileCLI.activeAccounts()[selection.ID] > 0 {
+				return nil, errors.New("请先结束该账号正在执行的移动 CLI 轮次，再重新登录")
+			}
 			if existing, conflict := s.terminals.existingClaudeLogin(selection.ID, login); existing != nil || conflict != nil {
 				return existing, conflict
 			}
 			if !login && selection.Subject == "" {
 				return nil, errors.New("Claude 账号状态已变化，请重试")
 			}
-			script = managedClaudeTerminalScript(guestPath(workspace), command, selection.GuestID, selection.Subject, login)
+			script = managedClaudeTerminalScript(s.cliWorkspace(workspace), command, selection.GuestID, selection.Subject, login)
 			if login {
+				if s.macosGuest != nil {
+					ctx, cancel := context.WithTimeout(s.lifetimeContext(), 20*time.Second)
+					_, browserErr := s.guestAPI(ctx, "", "GET", "/health", nil)
+					cancel()
+					if browserErr != nil {
+						return nil, errors.New("客机登录浏览器尚未就绪，请恢复浏览器连接后重试")
+					}
+				}
 				finished = func() {
 					ctx, cancel := context.WithTimeout(s.lifetimeContext(), 12*time.Second)
 					defer cancel()
@@ -265,8 +358,43 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 			}
 		}
 	}
+	var conversation *mobileRecord
+	if input.Kind == "claude" && sharedCLILauncher(command) {
+		script, conversation, err = s.prepareTerminalConversation(workspace, selection, input.sharedID)
+		if err != nil {
+			return nil, err
+		}
+	}
 	cmd := s.sshCommand(s.lifetimeContext(), "-tt", s.sshTarget(), "--", script)
+	if input.requestContext != nil {
+		s.account.mu.Lock()
+		if !s.mobileAuthorized(input.requestContext) {
+			s.account.mu.Unlock()
+			return nil, errMobileLocked
+		}
+	}
 	session, err := s.terminals.startSession(cmd, workspace, input.Kind, selection, finished)
+	if input.requestContext != nil {
+		s.account.mu.Unlock()
+	}
+	if err == nil && conversation != nil {
+		session.mu.Lock()
+		session.sharedID = conversation.ID
+		session.connectionID = conversation.Connection
+		session.mu.Unlock()
+		s.mobileCLI.mu.Lock()
+		conversation.TerminalID = session.id
+		if saveErr := writePrivate(mobileRecordPath(s.profile, conversation.ID), conversation); saveErr != nil {
+			err = saveErr
+		}
+		s.mobileCLI.mu.Unlock()
+		if err != nil {
+			s.terminals.remove(session.id)
+			return nil, err
+		}
+		s.prepareCLIConnection(session, conversation.ID)
+		s.monitorClaudeAccount(session, conversation.ID)
+	}
 	if err == nil && input.Kind == "claude" && selection.ID != "" {
 		s.noteClaudeSelection(selection.ID, workspace)
 	}
@@ -275,13 +403,30 @@ func (s *Server) createTerminal(input terminalRequest) (*terminalSession, error)
 
 func validClaudeGuestID(id string) bool { return id == "default" || validClaudeID(id) }
 
+func (s *Server) selectTerminalClaudeAccount(command, requested string, login bool, workspace string) (claudeSelection, error) {
+	parts, valid := mobileLaunchArgs(command, claudeSelection{})
+	if !login && valid == nil && len(parts) == 2 && parts[0] == "ccs" {
+		if requested != "" && requested != "auto" {
+			return claudeSelection{}, errors.New("CCS 使用自己的配置，不能指定 Cage 账号")
+		}
+		return claudeSelection{}, nil
+	}
+	return s.selectClaudeAccount(requested, login, workspace)
+}
+
 func (s *Server) readClaudeGuestSnapshot(ctx context.Context, id string) (claudeGuestSnapshot, error) {
+	if s.windowsGuest != nil {
+		return s.readWindowsClaudeAccount(ctx, "snapshot", id, "")
+	}
 	return s.readClaudeGuestReport(ctx, id, claudeSnapshotCommand(id))
 }
 
 func (s *Server) readClaudeGuestUsage(ctx context.Context, id, subject string) (claudeGuestSnapshot, error) {
 	if _, err := hex.DecodeString(subject); err != nil || len(subject) != 64 {
 		return claudeGuestSnapshot{}, errors.New("Claude 账号身份无效")
+	}
+	if s.windowsGuest != nil {
+		return s.readWindowsClaudeAccount(ctx, "usage", id, subject)
 	}
 	return s.readClaudeGuestReport(ctx, id, claudeGuestReportCommand(id, subject))
 }

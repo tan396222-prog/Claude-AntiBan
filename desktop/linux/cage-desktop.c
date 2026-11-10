@@ -34,6 +34,26 @@ typedef struct {
 static Cage app;
 typedef struct { GPtrArray *paths; gint64 expires; } FileSelection;
 static GHashTable *file_selections;
+static guint64 clipboard_revision = 1;
+static guint64 clipboard_generation = 0;
+static gboolean clipboard_watching = FALSE;
+typedef struct { GPtrArray *paths; gboolean pending, releasing; } ClipboardCopy;
+static GHashTable *clipboard_copies;
+static GPtrArray *clipboard_readers;
+static gboolean clipboard_cache_loaded = FALSE, clipboard_cache_collecting = FALSE;
+static void clipboard_cache_watch(void);
+static void clipboard_cache_ignored(JsonObject *object, const GError *error, gpointer data);
+static void clipboard_changed(GtkClipboard *clipboard, GdkEventOwnerChange *event, gpointer data) {
+    (void)clipboard; (void)event; (void)data; clipboard_revision++;
+}
+static guint64 clipboard_current_revision(void) {
+    clipboard_cache_watch();
+    if (!clipboard_watching) {
+        g_signal_connect(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), "owner-change", G_CALLBACK(clipboard_changed), NULL);
+        clipboard_watching = TRUE;
+    }
+    return clipboard_revision;
+}
 static void bootstrap(const char *option);
 static void show_error(const char *message);
 
@@ -42,6 +62,7 @@ typedef struct {
     GSubprocess *process;
     GCancellable *cancel;
     guint deadline;
+    gsize output_limit;
     BackendCallback callback;
     gpointer data;
 } Command;
@@ -136,7 +157,7 @@ static void command_finished(GObject *source, GAsyncResult *result, gpointer dat
     JsonObject *object = NULL;
     if (command->deadline) g_source_remove(command->deadline);
     if (g_subprocess_communicate_utf8_finish(G_SUBPROCESS(source), result, &output, NULL, &error)) {
-        if (!output || strlen(output) > 65536 || !json_parser_load_from_data(parser, output, -1, NULL) ||
+        if (!output || strlen(output) > command->output_limit || !json_parser_load_from_data(parser, output, -1, NULL) ||
             !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
             g_set_error_literal(&error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Cage 后台未返回有效状态，请查看私有配置中的 logs/。");
         } else {
@@ -156,7 +177,7 @@ static void command_finished(GObject *source, GAsyncResult *result, gpointer dat
     g_object_unref(command->cancel);
     g_free(command);
 }
-static void backend_arguments(const char *const *args, guint seconds, BackendCallback callback, gpointer data) {
+static void backend_arguments_limited(const char *const *args, guint seconds, gsize output_limit, BackendCallback callback, gpointer data) {
     GError *error = NULL;
     GSubprocessLauncher *launcher = g_subprocess_launcher_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE | G_SUBPROCESS_FLAGS_STDERR_SILENCE);
     g_subprocess_launcher_setenv(launcher, "CLAUDE_CAGE_CONFIG", app.profile, TRUE);
@@ -177,8 +198,12 @@ static void backend_arguments(const char *const *args, guint seconds, BackendCal
     command->cancel = g_cancellable_new();
     command->callback = callback;
     command->data = data;
+    command->output_limit = output_limit;
     command->deadline = g_timeout_add_seconds(seconds, command_timeout, command);
     g_subprocess_communicate_utf8_async(process, NULL, command->cancel, command_finished, command);
+}
+static void backend_arguments(const char *const *args, guint seconds, BackendCallback callback, gpointer data) {
+    backend_arguments_limited(args, seconds, 65536, callback, data);
 }
 static void backend(const char *action, const char *option, BackendCallback callback, gpointer data) {
     const char *args[] = {app.backend, action, "--json", option, NULL};
@@ -263,7 +288,7 @@ static char *choose_file(GtkFileChooserAction kind, const char *title, const cha
     app.picker_open = FALSE;
     return path;
 }
-typedef struct { WebKitScriptMessageReply *reply; JSCContext *context; } PendingReply;
+typedef struct { WebKitScriptMessageReply *reply; JSCContext *context; gboolean sync; guint64 revision, generation; char *connection; GPtrArray *clipboard_paths; } PendingReply;
 static PendingReply *pending_reply(WebKitScriptMessageReply *reply, JSCContext *context) {
     PendingReply *pending = g_new0(PendingReply, 1);
     pending->reply = webkit_script_message_reply_ref(reply);
@@ -271,14 +296,27 @@ static PendingReply *pending_reply(WebKitScriptMessageReply *reply, JSCContext *
     return pending;
 }
 static void pending_free(PendingReply *pending) {
+    if (pending->clipboard_paths) {
+        g_ptr_array_remove(clipboard_readers, pending->clipboard_paths);
+        g_ptr_array_unref(pending->clipboard_paths);
+    }
     webkit_script_message_reply_unref(pending->reply);
     g_object_unref(pending->context);
+    g_free(pending->connection);
     g_free(pending);
 }
 static void browser_file_finished(JsonObject *object, const GError *error, gpointer data) {
     PendingReply *pending = data;
     if (error) reply_error(pending->reply, error->message);
     else {
+        if (pending->sync) {
+            json_object_set_int_member(object, "revision", pending->revision);
+            const char *id = text_member(object, "files");
+            if (*id && (pending->generation != clipboard_generation || pending->revision != clipboard_current_revision())) {
+                const char *args[] = {app.backend, "clipboard-files", "--json", "--connection", pending->connection, "release", id, NULL};
+                backend_arguments(args, 10, clipboard_cache_ignored, NULL);
+            }
+        }
         JsonNode *node = json_node_new(JSON_NODE_OBJECT);
         json_node_set_object(node, object);
         char *json = json_to_string(node, FALSE);
@@ -300,7 +338,7 @@ static void clipboard_content_text(GtkClipboard *clipboard, const gchar *text, g
     if (text && strlen(text) > MAX_MESSAGE) reply_error(pending->reply, "剪贴板内容超过 2 MB。");
     else {
         char *quoted = quote(text ? text : "");
-        char *json = g_strdup_printf("{\"text\":%s}", quoted);
+        char *json = pending->sync ? g_strdup_printf("{\"text\":%s,\"revision\":%lu}", quoted, (unsigned long)pending->revision) : g_strdup_printf("{\"text\":%s}", quoted);
         reply_json(pending->reply, pending->context, json);
         g_free(json); g_free(quoted);
     }
@@ -319,7 +357,7 @@ static void clipboard_content_image(GtkClipboard *clipboard, GdkPixbuf *image, g
         reply_error(pending->reply, "图片不能超过 20 MB 或 4000 万像素。");
     } else {
         char *encoded = g_base64_encode((const guchar *)buffer, length);
-        char *json = g_strdup_printf("{\"png\":\"%s\"}", encoded);
+        char *json = pending->sync ? g_strdup_printf("{\"png\":\"%s\",\"revision\":%lu}", encoded, (unsigned long)pending->revision) : g_strdup_printf("{\"png\":\"%s\"}", encoded);
         reply_json(pending->reply, pending->context, json);
         g_free(json); g_free(encoded);
     }
@@ -381,6 +419,16 @@ static void reply_selected_uris(char **uris, PendingReply *pending) {
         }
         g_free(hostname); g_ptr_array_add(paths, path);
     }
+    if (!error && pending->sync) {
+        if (!clipboard_readers) clipboard_readers = g_ptr_array_new();
+        pending->clipboard_paths = g_ptr_array_ref(paths);
+        g_ptr_array_add(clipboard_readers, pending->clipboard_paths);
+        const char **args = g_new0(const char *, paths->len + 7);
+        args[0] = app.backend; args[1] = "clipboard-files"; args[2] = "--json"; args[3] = "--connection"; args[4] = pending->connection; args[5] = "send";
+        for (guint i = 0; i < paths->len; i++) args[i + 6] = g_ptr_array_index(paths, i);
+        backend_arguments(args, 1800, browser_file_finished, pending);
+        g_free(args); g_ptr_array_unref(paths); return;
+    }
     char *json = error ? NULL : remember_files(paths, &error);
     if (error) reply_error(pending->reply, error->message);
     else reply_json(pending->reply, pending->context, json);
@@ -402,6 +450,150 @@ static void clipboard_gnome_files(GtkClipboard *clipboard, GtkSelectionData *sel
 static void clipboard_file_uris(GtkClipboard *clipboard, gchar **uris, gpointer data) {
     if (uris && uris[0]) reply_selected_uris(uris, data);
     else gtk_clipboard_request_contents(clipboard, gdk_atom_intern_static_string("x-special/gnome-copied-files"), clipboard_gnome_files, data);
+}
+static void clipboard_sync_reply(PendingReply *pending, gboolean superseded) {
+    gdk_display_sync(gdk_display_get_default());
+    while (g_main_context_iteration(NULL, FALSE)) { }
+    char *json = g_strdup_printf("{\"revision\":%lu,\"superseded\":%s}", (unsigned long)clipboard_current_revision(), superseded ? "true" : "false");
+    reply_json(pending->reply, pending->context, json); g_free(json); pending_free(pending);
+}
+static void clipboard_cache_command(const char *action, const char *id, BackendCallback callback, gpointer data) {
+    char *quoted = quote(id ? id : "");
+    char *request = g_strdup_printf("{\"action\":\"%s\",\"cache_id\":%s}", action, quoted);
+    const char *args[] = {app.backend, "clipboard-files", "--json", "cache", request, NULL};
+    backend_arguments_limited(args, 10, 30 << 20, callback, data);
+    g_free(request); g_free(quoted);
+}
+static void clipboard_cache_ignored(JsonObject *object, const GError *error, gpointer data) { (void)object; (void)error; (void)data; }
+static void clipboard_copy_free(gpointer data) { ClipboardCopy *copy = data; g_ptr_array_unref(copy->paths); g_free(copy); }
+static void clipboard_cache_remember(JsonObject *object, gboolean pending) {
+    const char *id = text_member(object, "cache_id");
+    JsonArray *paths = json_object_has_member(object, "paths") ? json_object_get_array_member(object, "paths") : NULL;
+    if (!*id || !paths || !json_array_get_length(paths) || g_hash_table_contains(clipboard_copies, id)) return;
+    ClipboardCopy *copy = g_new0(ClipboardCopy, 1);
+    copy->pending = pending;
+    copy->paths = g_ptr_array_new_with_free_func(g_free);
+    for (guint i = 0; i < json_array_get_length(paths); i++) g_ptr_array_add(copy->paths, g_strdup(json_array_get_string_element(paths, i)));
+    g_hash_table_insert(clipboard_copies, g_strdup(id), copy);
+}
+typedef struct { char *id; PendingReply *discarded; } ClipboardDisposal;
+static void clipboard_cache_released(JsonObject *object, const GError *error, gpointer data) {
+    (void)object;
+    ClipboardDisposal *disposal = data;
+    ClipboardCopy *copy = g_hash_table_lookup(clipboard_copies, disposal->id);
+    if (copy) { copy->releasing = FALSE; if (!error) g_hash_table_remove(clipboard_copies, disposal->id); }
+    if (disposal->discarded) clipboard_sync_reply(disposal->discarded, TRUE);
+    g_free(disposal->id); g_free(disposal);
+}
+static void clipboard_cache_release(const char *id, PendingReply *discarded) {
+    if (!id || !*id) { if (discarded) clipboard_sync_reply(discarded, TRUE); return; }
+    ClipboardCopy *copy = g_hash_table_lookup(clipboard_copies, id);
+    if (copy) { copy->releasing = TRUE; copy->pending = FALSE; }
+    ClipboardDisposal *disposal = g_new0(ClipboardDisposal, 1);
+    disposal->id = g_strdup(id); disposal->discarded = discarded;
+    clipboard_cache_command("release", id, clipboard_cache_released, disposal);
+}
+static gboolean clipboard_cache_referenced(GPtrArray *selected, GPtrArray *owned) {
+    if (!selected) return FALSE;
+    char *root = g_path_get_dirname(g_ptr_array_index(owned, 0));
+    char *prefix = g_strconcat(root, G_DIR_SEPARATOR_S, NULL);
+    gboolean found = FALSE;
+    for (guint i = 0; i < selected->len && !found; i++) {
+        const char *path = g_ptr_array_index(selected, i);
+        char *parent = g_strconcat(path, G_DIR_SEPARATOR_S, NULL);
+        found = !strcmp(path, root) || g_str_has_prefix(path, prefix) || g_str_has_prefix(root, parent);
+        g_free(parent);
+    }
+    g_free(root); g_free(prefix); return found;
+}
+static void clipboard_cache_collect_uris(char **uris, guint64 revision) {
+    clipboard_cache_collecting = FALSE;
+    if (revision != clipboard_revision) return;
+    GPtrArray *selected = g_ptr_array_new_with_free_func(g_free);
+    for (guint i = 0; uris && uris[i]; i++) {
+        char *path = g_filename_from_uri(uris[i], NULL, NULL);
+        if (!path) { g_ptr_array_unref(selected); return; }
+        g_ptr_array_add(selected, path);
+    }
+    GHashTableIter iterator; gpointer key, value;
+    g_hash_table_iter_init(&iterator, clipboard_copies);
+    while (g_hash_table_iter_next(&iterator, &key, &value)) {
+        ClipboardCopy *copy = value;
+        gboolean referenced = copy->pending || copy->releasing || clipboard_cache_referenced(selected, copy->paths);
+        for (guint i = 0; clipboard_readers && i < clipboard_readers->len && !referenced; i++)
+            referenced = clipboard_cache_referenced(g_ptr_array_index(clipboard_readers, i), copy->paths);
+        if (!referenced) clipboard_cache_release(key, NULL);
+    }
+    g_ptr_array_unref(selected);
+}
+static void clipboard_cache_gnome(GtkClipboard *clipboard, GtkSelectionData *selection, gpointer data) {
+    (void)clipboard;
+    guint64 revision = *(guint64 *)data;
+    gint length = gtk_selection_data_get_length(selection);
+    if (length > MAX_MESSAGE) { clipboard_cache_collecting = FALSE; g_free(data); return; }
+    char *text = length > 0 ? g_strndup((const char *)gtk_selection_data_get_data(selection), length) : NULL;
+    char *start = text ? strchr(text, '\n') : NULL;
+    char **uris = start ? g_uri_list_extract_uris(start + 1) : NULL;
+    clipboard_cache_collect_uris(uris, revision);
+    g_strfreev(uris); g_free(text); g_free(data);
+}
+static void clipboard_cache_uris(GtkClipboard *clipboard, gchar **uris, gpointer data) {
+    if (!uris) { gtk_clipboard_request_contents(clipboard, gdk_atom_intern_static_string("x-special/gnome-copied-files"), clipboard_cache_gnome, data); return; }
+    clipboard_cache_collect_uris(uris, *(guint64 *)data); g_free(data);
+}
+static gboolean clipboard_cache_tick(gpointer data) {
+    (void)data;
+    if (!clipboard_cache_loaded || clipboard_cache_collecting || !g_hash_table_size(clipboard_copies)) return G_SOURCE_CONTINUE;
+    clipboard_cache_collecting = TRUE;
+    guint64 *revision = g_new(guint64, 1); *revision = clipboard_revision;
+    gtk_clipboard_request_uris(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), clipboard_cache_uris, revision);
+    return G_SOURCE_CONTINUE;
+}
+static void clipboard_cache_loaded_reply(JsonObject *object, const GError *error, gpointer data) {
+    (void)data;
+    clipboard_cache_loaded = TRUE;
+    if (error || !object || !json_object_has_member(object, "selections")) return;
+    JsonArray *items = json_object_get_array_member(object, "selections");
+    for (guint i = 0; items && i < json_array_get_length(items); i++) clipboard_cache_remember(json_array_get_object_element(items, i), FALSE);
+    clipboard_cache_tick(NULL);
+}
+static void clipboard_cache_watch(void) {
+    if (clipboard_copies) return;
+    clipboard_copies = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, clipboard_copy_free);
+    g_timeout_add_seconds(1, clipboard_cache_tick, NULL);
+    clipboard_cache_command("list", "", clipboard_cache_loaded_reply, NULL);
+}
+static void clipboard_sync_provide(GtkClipboard *clipboard, GtkSelectionData *selection, guint info, gpointer data) {
+    (void)clipboard; char **payload = data;
+    gtk_selection_data_set(selection, gdk_atom_intern_static_string(info ? "x-special/gnome-copied-files" : "text/uri-list"),8,(const guchar *)payload[info],strlen(payload[info]));
+}
+static void clipboard_sync_clear(GtkClipboard *clipboard, gpointer data) { (void)clipboard; g_strfreev(data); }
+static void clipboard_files_received(JsonObject *object, const GError *error, gpointer data) {
+    PendingReply *pending = data;
+    if (error) { clipboard_cache_command("list", "", clipboard_cache_loaded_reply, NULL); reply_error(pending->reply, error->message); pending_free(pending); return; }
+    clipboard_cache_watch(); clipboard_cache_remember(object, TRUE);
+    const char *cache = text_member(object, "cache_id");
+    if (pending->generation != clipboard_generation || pending->revision != clipboard_current_revision()) { clipboard_cache_release(cache, pending); return; }
+    JsonArray *paths = json_object_get_array_member(object, "paths");
+    if (!paths || !json_array_get_length(paths)) { clipboard_cache_release(cache, NULL); reply_error(pending->reply,"剪贴板文件读取失败。"); pending_free(pending); return; }
+    GString *text = g_string_new("copy\n"), *uris = g_string_new("");
+    for (guint i = 0; i < json_array_get_length(paths); i++) {
+        char *uri = g_filename_to_uri(json_array_get_string_element(paths, i), NULL, NULL);
+        if (!uri) { clipboard_cache_release(cache, NULL); g_string_free(text,TRUE); g_string_free(uris,TRUE); reply_error(pending->reply,"剪贴板文件位置无效。"); pending_free(pending); return; }
+        g_string_append_printf(text,"%s\n",uri); g_string_append_printf(uris,"%s\r\n",uri); g_free(uri);
+    }
+    /* GTK copies these values into an owned provider, including native file
+       manager targets. Use the selection callbacks below for both formats. */
+    GtkTargetEntry targets[] = {{"text/uri-list",0,0},{"x-special/gnome-copied-files",0,1}};
+    char **payload = g_new0(char *,3); payload[0] = g_string_free(uris,FALSE); payload[1] = g_string_free(text,FALSE);
+    if (!gtk_clipboard_set_with_data(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), targets,2, clipboard_sync_provide,clipboard_sync_clear,payload)) {
+        clipboard_cache_release(cache, NULL); g_strfreev(payload); reply_error(pending->reply,"剪贴板文件写入失败。"); pending_free(pending);
+    } else {
+        clipboard_revision++;
+        ClipboardCopy *copy = g_hash_table_lookup(clipboard_copies, cache); if (copy) copy->pending = FALSE;
+        if (*cache) clipboard_cache_command("publish", cache, clipboard_cache_ignored, NULL);
+        clipboard_sync_reply(pending,FALSE);
+    }
 }
 static void session_refreshed(JsonObject *object, const GError *error, gpointer data) {
     PendingReply *pending = data;
@@ -491,7 +683,7 @@ static gboolean start_smoke(gpointer data) {
         "if(phase==='seed')localStorage.setItem(storageKey,marker);"
         "const storageMarkerMatched=!phase||localStorage.getItem(storageKey)===marker;"
         "if(phase==='verify'&&storageMarkerMatched)localStorage.removeItem(storageKey);"
-        "stage='bridge';const bridge=window.webkit.messageHandlers.cage;"
+        "stage='bridge';const bridge=window.cageNativeBridge;"
         "let unauthenticatedBridgeDenied=false;try{await window.webkit.messageHandlers.cageTransport.postMessage({token:'invalid',request:{action:'clipboardRead'}});}catch{unauthenticatedBridgeDenied=true;}"
         "stage='account-device';const native=await bridge.postMessage({action:'accountDevice',operation:'status'});"
         "stage='app-update';const update=await bridge.postMessage({action:'appUpdate',operation:'status'});"
@@ -516,7 +708,7 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
     (void)manager; (void)data;
     char *json = jsc_value_to_json(value, 0);
     JsonParser *parser = json_parser_new();
-    if (!json || strlen(json) > MAX_MESSAGE || !json_parser_load_from_data(parser, json, -1, NULL) ||
+    if (!json || strlen(json) > 30 * 1024 * 1024 || !json_parser_load_from_data(parser, json, -1, NULL) ||
         !JSON_NODE_HOLDS_OBJECT(json_parser_get_root(parser))) {
         reply_error(reply, "原生请求格式无效。");
         goto done;
@@ -576,6 +768,13 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
             reply_json(reply, context, state);
             g_free(state); g_free(version); g_free(message);
         }
+    } else if (!strcmp(name, "desktopFileAction")) {
+        const char *id = text_member(request, "id"), *connection = text_member(request, "connection_id");
+        if (!g_uuid_string_is_valid(id)) reply_error(reply, "文件打开标识无效。");
+        else {
+            const char *args[] = {app.backend,"desktop-file","--json","--connection",*connection ? connection : "local",id,NULL};
+            backend_arguments(args,1800,browser_file_finished,pending_reply(reply,context));
+        }
     } else if (!strcmp(name, "saveBrowserDownload") || !strcmp(name, "browserDownloadAction")) {
         const char *id = text_member(request, "id");
         const char *operation = !strcmp(name, "saveBrowserDownload") ? "save" : text_member(request, "operation");
@@ -603,6 +802,19 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
             }
             g_free(path);
         }
+    } else if (!strcmp(name, "shareLocalProject")) {
+        const char *connection = text_member(request, "connection_id"), *mode = text_member(request, "mode");
+        if (app.picker_open || !*connection || (strcmp(mode,"read") && strcmp(mode,"write"))) {
+            reply_error(reply, "请在云端工作台重新选择项目。");
+        } else {
+            const char *prompt = !strcmp(mode,"write") ? "云端 Cage 可以读取、修改和删除所选项目中的文件。" : "云端 Cage 可以读取所选项目中的文件。";
+            char *path = choose_file(GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER, prompt, NULL);
+            if (path) {
+                const char *args[] = {app.backend,"share-project","--json","--connection",connection,mode,path,NULL};
+                backend_arguments(args,90,browser_file_finished,pending_reply(reply,context));
+            } else reply_json(reply,context,"{\"canceled\":true}");
+            g_free(path);
+        }
     } else if (!strcmp(name, "chooseFolder")) {
         if (app.picker_open) reply_error(reply, "请先完成当前文件选择。");
         else {
@@ -614,6 +826,39 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
         }
     } else if (!strcmp(name, "clipboardRead")) {
         gtk_clipboard_request_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), clipboard_received, pending_reply(reply, context));
+    } else if (!strcmp(name, "clipboardRevision")) {
+        char revision[32]; g_snprintf(revision,sizeof(revision),"%lu",(unsigned long)clipboard_current_revision()); reply_json(reply,context,revision);
+    } else if (!strcmp(name, "clipboardSyncCancel")) {
+        clipboard_generation++; reply_json(reply,context,"true");
+    } else if (!strcmp(name, "clipboardSyncRelease")) {
+        const char *id = text_member(request, "files");
+        if (!g_uuid_string_is_valid(id)) reply_error(reply, "剪贴板文件标识无效。");
+        else {
+            const char *args[] = {app.backend, "clipboard-files", "--json", "--connection", text_member(request, "connection_id"), "release", id, NULL};
+            backend_arguments(args, 10, browser_file_finished, pending_reply(reply, context));
+        }
+    } else if (!strcmp(name, "clipboardSyncRead")) {
+        PendingReply *pending = pending_reply(reply,context); pending->sync = TRUE; pending->generation = clipboard_generation; pending->revision = clipboard_current_revision(); pending->connection = g_strdup(text_member(request,"connection_id"));
+        gtk_clipboard_request_uris(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),clipboard_file_uris,pending);
+    } else if (!strcmp(name, "clipboardSyncWrite")) {
+        PendingReply *pending = pending_reply(reply,context); pending->generation = clipboard_generation; pending->revision = json_object_has_member(request,"revision") ? (guint64)json_object_get_int_member(request,"revision") : clipboard_current_revision();
+        if (pending->revision != clipboard_current_revision()) clipboard_sync_reply(pending,TRUE);
+        else if (*text_member(request,"files")) {
+            const char *id = text_member(request,"files");
+            if (!g_uuid_string_is_valid(id)) { reply_error(reply,"剪贴板文件标识无效。"); pending_free(pending); }
+            else { const char *args[] = {app.backend,"clipboard-files","--json","--connection",text_member(request,"connection_id"),"receive",id,NULL}; backend_arguments(args,1800,clipboard_files_received,pending); }
+        } else if (*text_member(request,"png")) {
+            gsize length = 0; guchar *bytes = g_base64_decode(text_member(request,"png"),&length);
+            GdkPixbufLoader *loader = gdk_pixbuf_loader_new_with_type("png",NULL);
+            gboolean valid = loader && length <= 20 * 1024 * 1024 && gdk_pixbuf_loader_write(loader,bytes,length,NULL) && gdk_pixbuf_loader_close(loader,NULL);
+            GdkPixbuf *image = valid ? gdk_pixbuf_loader_get_pixbuf(loader) : NULL;
+            if (!image || (gint64)gdk_pixbuf_get_width(image) * gdk_pixbuf_get_height(image) > 40000000) { reply_error(reply,"剪贴板图片格式或大小无效。"); pending_free(pending); }
+            else { gtk_clipboard_set_image(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),image); clipboard_revision++; clipboard_sync_reply(pending,FALSE); }
+            if (loader) g_object_unref(loader);
+            g_free(bytes);
+        } else if (json_object_has_member(request,"text") && strlen(text_member(request,"text")) <= MAX_MESSAGE) {
+            gtk_clipboard_set_text(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD),text_member(request,"text"),-1); clipboard_revision++; clipboard_sync_reply(pending,FALSE);
+        } else { reply_error(reply,"剪贴板内容格式或大小无效。"); pending_free(pending); }
     } else if (!strcmp(name, "clipboardReadContent")) {
         gtk_clipboard_request_uris(gtk_clipboard_get(GDK_SELECTION_CLIPBOARD), clipboard_file_uris, pending_reply(reply, context));
     } else if (!strcmp(name, "chooseUploadFiles")) {
@@ -739,7 +984,7 @@ static void install_bridge(void) {
         "window.cageLinuxBridgeInit='origin-valid';window.cageNativeIMEAvailable=true;try{"
         "const transport=window.webkit.messageHandlers.cageTransport;const token=%s;"
         "const cage=Object.freeze({postMessage(request){return transport.postMessage({token,request});}});"
-        "Object.defineProperty(window.webkit.messageHandlers,'cage',{value:cage,writable:false,configurable:false});"
+        "Object.defineProperty(window,'cageNativeBridge',{value:cage,writable:false,configurable:false});"
         "window.cageLinuxBridgeInit='ready';}catch(error){window.cageLinuxBridgeInit=error.name;}"
         "})();", app.port, token);
     /* The host allowlist narrows injection; the script and native receiver
@@ -757,7 +1002,20 @@ static void bootstrapped(JsonObject *object, const GError *error, gpointer data)
     (void)data;
     app.bootstrapping = FALSE;
     gtk_widget_set_sensitive(app.retry, TRUE);
-    if (error) { show_error(error->message); return; }
+    if (error) {
+        diagnostic_event(error->message);
+        gboolean chinese = FALSE;
+        for (const char *p = error->message; *p; p = g_utf8_next_char(p)) {
+            gunichar value = g_utf8_get_char(p);
+            if (value >= 0x4E00 && value <= 0x9FFF) { chinese = TRUE; break; }
+        }
+        if (chinese) show_error(error->message);
+        else {
+            char *message = g_strdup_printf("启动工作台失败：本机后台未返回可识别的原因（错误码 %d）。请点击“重试连接”；仍失败时请保留此提示并反馈给维护者。", error->code);
+            show_error(message); g_free(message);
+        }
+        return;
+    }
     const char *status = text_member(object, "status");
     app.needs_update = strcmp(status, "ready") != 0;
     if (!strcmp(status, "upgrade_pending")) {
@@ -831,9 +1089,12 @@ static void load_changed(WebKitWebView *web, WebKitLoadEvent event, gpointer dat
     }
 }
 static gboolean load_failed(WebKitWebView *web, WebKitLoadEvent event, const char *uri, GError *error, gpointer data) {
-    (void)web; (void)event; (void)uri; (void)error; (void)data;
+    (void)web; (void)event; (void)uri; (void)data;
     app.navigation_failed = TRUE;
-    show_error("无法连接 Cage 工作台。后台任务保留，可重试连接。");
+    if (error) diagnostic_event(error->message);
+    char *message = g_strdup_printf("打开工作台失败：内置网页组件未能加载本机后台（错误码 %d）。请点击“重试连接”；仍失败时请保留此错误提示并反馈给维护者。后台任务不会因此自动结束。", error ? error->code : 0);
+    show_error(message);
+    g_free(message);
     return TRUE;
 }
 static void process_terminated(WebKitWebView *web, WebKitWebProcessTerminationReason reason, gpointer data) {
@@ -978,7 +1239,7 @@ static gboolean smoke_diagnostics(gpointer data) {
         "const account=await fetch('/api/account');const state=await fetch('/api/status');const settings=await fetch('/api/settings');"
         "let unlocked=false;try{unlocked=(await account.json()).unlocked===true;}catch{}"
         "const descriptor=Object.getOwnPropertyDescriptor(window,'webkit');"
-        "return {bridgeAvailable:!!window.webkit?.messageHandlers?.cage,bridgeInit:window.cageLinuxBridgeInit||'not-injected',webkitConfigurable:descriptor?.configurable,transportPresent:!!window.webkit?.messageHandlers?.cageTransport,readyState:document.readyState,"
+        "return {bridgeAvailable:!!window.cageNativeBridge,bridgeInit:window.cageLinuxBridgeInit||'not-injected',webkitConfigurable:descriptor?.configurable,transportPresent:!!window.webkit?.messageHandlers?.cageTransport,readyState:document.readyState,"
         "renderedButtons:document.querySelectorAll('button').length,accountStatus:account.status,accountUnlocked:unlocked,statusStatus:state.status,settingsStatus:settings.status};";
     webkit_web_view_call_async_javascript_function(app.web, body, -1, NULL, NULL, "cage-smoke-diagnostics", NULL, smoke_diagnostics_ready, NULL);
     return G_SOURCE_REMOVE;
@@ -1030,7 +1291,7 @@ int main(int argc, char **argv) {
     }
     char *hash = g_compute_checksum_for_string(G_CHECKSUM_SHA256, app.profile, -1);
     char *id = g_strdup_printf("app.cage.desktop.p%.24s", hash);
-    app.application = gtk_application_new(id, G_APPLICATION_DEFAULT_FLAGS);
+    app.application = gtk_application_new(id, G_APPLICATION_FLAGS_NONE);
     g_free(hash); g_free(id);
     g_signal_connect(app.application, "activate", G_CALLBACK(activate), NULL);
     if (app.smoke_output) {

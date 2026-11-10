@@ -1,14 +1,20 @@
 #requires -Version 7.0
-# One real signature on a disposable PE file. No package, version or release writes.
+# Explicit signing or read-only credential verification. No package, version or release writes.
 [CmdletBinding()]
-param()
+param([ValidateSet('sign', 'credential-info')][string]$Mode = 'sign')
 . (Join-Path $PSScriptRoot 'windows-common.ps1')
 if (-not $IsWindows) { throw 'This verification requires Windows trust APIs.' }
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or
-    $env:GITHUB_REPOSITORY -ne 'Lee-xeo/Claude-Cage' -or $env:GITHUB_REF -ne 'refs/heads/main') {
+    $env:GITHUB_REPOSITORY -ne 'Lee-xeo/Claude-Cage' -or
+    $env:GITHUB_REF -ne 'refs/heads/main') {
     throw 'Run the explicit main-branch signing verification workflow.'
 }
 if ($env:CAGE_WINDOWS_SIGNING_PROVIDER -ne 'esigner') { throw 'Select esigner for this verification.' }
+if ($Mode -eq 'credential-info') {
+    try { Invoke-BuildTool 'node' @((Join-Path $PSScriptRoot 'esigner.mjs'), 'diagnose') }
+    finally { Remove-Item Env:CAGE_ESIGNER_PASSWORD, Env:CAGE_ESIGNER_TOTP_SECRET -ErrorAction SilentlyContinue }
+    return
+}
 foreach ($name in @('CAGE_ESIGNER_USERNAME', 'CAGE_ESIGNER_PASSWORD', 'CAGE_ESIGNER_CREDENTIAL_ID', 'CAGE_ESIGNER_CERTIFICATE_SERIAL', 'CAGE_ESIGNER_TOTP_SECRET')) {
     if (-not [Environment]::GetEnvironmentVariable($name)) { throw "Missing cage-release setting: $name" }
 }

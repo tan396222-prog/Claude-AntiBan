@@ -16,7 +16,7 @@ import { Modal } from "./views";
 
 // The saved page is primary, folder context secondary, management actions quiet.
 // Reuse paper/strong/muted/line tokens, 8/12/16px spacing and existing modal forms.
-export function BrowserFavorites({ current, ready, onOpen, shortcuts = true }) {
+export function BrowserFavorites({ current, ready, onOpen, shortcuts = true, menu = false, returnFocusRef }) {
   const [data, setData] = useState(null);
   const [open, setOpen] = useState(false);
   const [editor, setEditor] = useState(null);
@@ -99,9 +99,9 @@ export function BrowserFavorites({ current, ready, onOpen, shortcuts = true }) {
     document.addEventListener("keydown", key);
     return () => {
       document.removeEventListener("keydown", key);
-      toggle.current?.focus();
+      (returnFocusRef?.current || toggle.current)?.focus();
     };
-  }, [open]);
+  }, [open, returnFocusRef]);
   const mutation = async (body) => {
     const next = await api("/favorites", body);
     setData(next);
@@ -171,23 +171,30 @@ export function BrowserFavorites({ current, ready, onOpen, shortcuts = true }) {
     <>
       <div className="favorites-actions">
         <button
-          className={`icon-button favorite-star ${favorite ? "saved" : ""}`}
+          className={`${menu ? "browser-menu-item" : "icon-button"} favorite-star ${favorite ? "saved" : ""}`}
+          role={menu ? "menuitem" : undefined}
           aria-label={favorite ? "编辑此页收藏" : "收藏此页"}
           title={shortcut(favorite ? "编辑此页收藏 ⌘D" : "收藏此页 ⌘D")}
           disabled={!canSave || !data}
-          onClick={addCurrent}
+          onClick={(event) => {
+            event.currentTarget.focus();
+            addCurrent();
+          }}
         >
           <Star size={17} fill={favorite ? "currentColor" : "none"} />
+          {menu && <span>{favorite ? "编辑此页收藏" : "收藏此页"}</span>}
         </button>
         <button
           ref={toggle}
-          className="icon-button"
+          className={menu ? "browser-menu-item" : "icon-button"}
+          role={menu ? "menuitem" : undefined}
           aria-label="收藏夹"
           title={shortcut("收藏夹 ⌘⇧O")}
           aria-expanded={open}
           onClick={() => (open ? setOpen(false) : show())}
         >
           <Folder size={17} />
+          {menu && <span>收藏夹</span>}
         </button>
       </div>
       {open &&

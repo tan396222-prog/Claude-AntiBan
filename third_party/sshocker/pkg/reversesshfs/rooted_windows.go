@@ -356,6 +356,14 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 		windows.CloseHandle(fh)
 		return nil, err
 	}
+	if h.cloud {
+		var fi windows.ByHandleFileInformation
+		err := windows.GetFileInformationByHandle(fh, &fi)
+		if err != nil || fi.NumberOfLinks != 1 || fi.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE) != 0 {
+			windows.CloseHandle(fh)
+			return nil, errDenied
+		}
+	}
 	if pf.Trunc {
 		if err := windows.Ftruncate(fh, 0); err != nil {
 			windows.CloseHandle(fh)

@@ -8,6 +8,8 @@ test("normal size preserves logical pixels; zoom changes workspace, large displa
   assert.deepEqual(displayGeometry({ width: 1000, height: 700 }, { desktop: true, zoom: 1.25 }), { width: 1600, height: 1120 });
   assert.deepEqual(displayGeometry({ width: 5000, height: 3000 }, { desktop: true }), { width: 8192, height: 4915 });
   assert.deepEqual(displayGeometry({ width: 286, height: 446 }), { width: 572, height: 892 });
+  assert.deepEqual(displayGeometry({ width: 160, height: 240 }, { density: 1.5 }), { width: 240, height: 360 });
+  assert.deepEqual(displayGeometry({ width: 1000, height: 700 }, { desktop: true, zoom: 1.25, density: 1.5 }), { width: 1200, height: 840 });
   assert.equal(displayGeometry({ width: 0, height: 700 }), null);
 });
 
@@ -56,5 +58,19 @@ test("persistent failure has bounded retries and supports explicit retry", async
     sync.retry();
     await pause(20);
     assert.equal(requests, 5);
+  } finally { sync.dispose(); }
+});
+
+test("a continuous drag sends the latest size on each tick", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const requests = [];
+  const sync = displaySizeSync(async size => { requests.push(size.width); }, { delay: 100 });
+  try {
+    for (let width = 1000; width < 1012; width++) {
+      sync.update({ width, height: 700 });
+      t.mock.timers.tick(25);
+      await Promise.resolve();
+    }
+    assert.deepEqual(requests, [1003, 1007, 1011]);
   } finally { sync.dispose(); }
 });

@@ -38,7 +38,7 @@ export function usePasswordVault(ready, tab) {
   return { state, act };
 }
 
-export function BrowserVaultBar({ tab, vault, onManage, ready }) {
+export function BrowserVaultBar({ tab, vault, onManage, ready, menu = false }) {
   const [open, setOpen] = useState(false), [busy, setBusy] = useState(false), [message, setMessage] = useState("");
   const { state, act } = vault;
   const entries = state.tab === tab.id ? state.entries : [];
@@ -54,8 +54,9 @@ export function BrowserVaultBar({ tab, vault, onManage, ready }) {
     if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); event.currentTarget.querySelector("button").focus(); }
   }}>
     <div className="vault-browser-heading">
-      <button className="text-button" aria-expanded={open} onClick={() => setOpen(!open)}>
-        <KeyRound size={14} /> 密码{entries.length ? ` · ${entries.length} 个账号` : ""}
+      <button className={menu ? "browser-menu-item" : "text-button"} role={menu ? "menuitem" : undefined}
+        aria-expanded={open} onClick={() => setOpen(!open)}>
+        <KeyRound size={16} /><span>密码{entries.length ? ` · ${entries.length} 个账号` : ""}</span>
       </button>
       {message && <span role="status">{message}</span>}
     </div>

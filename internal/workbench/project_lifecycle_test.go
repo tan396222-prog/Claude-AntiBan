@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/lima-vm/sshocker/pkg/reversesshfs"
-	"github.com/sylvinus/agent-vm/internal/mounts"
 )
 
 type observedProjectReader struct {
@@ -57,7 +56,7 @@ func TestProjectShareCloseWaitsForTransportAndChild(t *testing.T) {
 	root := t.TempDir()
 	go func() {
 		defer close(share.done)
-		_ = reversesshfs.ServeConfined(share.transport, root, false, mounts.BaseNames)
+		_ = reversesshfs.ServeConfined(share.transport, root, false, nil)
 		close(served)
 		share.stop()
 		_ = cmd.Wait()

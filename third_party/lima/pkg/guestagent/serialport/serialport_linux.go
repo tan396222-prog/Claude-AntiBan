@@ -15,17 +15,8 @@ func openPort(name string) (p *Port, err error) {
 		return nil, err
 	}
 
-	defer func() {
-		if err != nil && f != nil {
-			f.Close()
-		}
-	}()
-
-	fd := f.Fd()
-	if err = unix.SetNonblock(int(fd), false); err != nil {
-		return nil, err
-	}
-
+	// Keep the descriptor nonblocking for Go's poller. Closing the listener
+	// must interrupt a read even when the host has stopped sending data.
 	return &Port{f: f}, nil
 }
 

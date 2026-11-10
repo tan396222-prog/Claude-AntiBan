@@ -2,11 +2,15 @@ package cage
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sylvinus/agent-vm/internal/diagnostics"
 	"github.com/sylvinus/agent-vm/internal/host"
 )
 
@@ -21,6 +25,42 @@ func TestResourceLimitsUseExistingHostShare(t *testing.T) {
 		if memory != tc.wantMemory || cpus != tc.wantCPU {
 			t.Fatal(tc, memory, cpus)
 		}
+	}
+}
+
+func TestResourceFailuresKeepDiagnosticCausePrivate(t *testing.T) {
+	profile := t.TempDir()
+	previous := diagnostics.Default()
+	diagnostics.SetDefault(diagnostics.New(profile))
+	t.Cleanup(func() { diagnostics.SetDefault(previous) })
+	dir := t.TempDir()
+	var attempts int
+	stop := StartResourceManager(context.Background(), dir, 4<<30, 2, func(context.Context, string) ([]byte, error) {
+		attempts++
+		if attempts <= 2 {
+			return nil, errors.New("resource probe execution failed: exit status 255; stderr=getsockname failed: Not a socket; token=private-probe-token")
+		}
+		return []byte("invalid metrics"), nil
+	}, func(context.Context, uint64) error { t.Error("failed sample changed memory target"); return nil })
+	defer stop()
+	deadline := time.Now().Add(9 * time.Second)
+	var log []byte
+	for time.Now().Before(deadline) {
+		log, _ = os.ReadFile(filepath.Join(profile, "logs", "events.jsonl"))
+		if strings.Contains(string(log), "incomplete guest resource observation") {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	if !strings.Contains(string(log), "Not a socket") || !strings.Contains(string(log), "incomplete guest resource observation") {
+		t.Fatalf("failure causes missing from diagnostics: %s", log)
+	}
+	if strings.Contains(string(log), "private-probe-token") || strings.Count(string(log), "Not a socket") != 1 {
+		t.Fatalf("secret leaked or repeated failure flooded log: %s", log)
+	}
+	status, err := ReadResourceStatus(dir)
+	if err != nil || !strings.Contains(status.Error, "自动回收内存已暂停") || strings.Contains(status.Error, "Not a socket") || strings.Contains(status.Error, "private-probe-token") {
+		t.Fatalf("technical detail escaped to resource status: %+v %v", status, err)
 	}
 }
 

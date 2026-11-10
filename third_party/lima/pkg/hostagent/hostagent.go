@@ -910,6 +910,10 @@ func (a *HostAgent) separateStaticPortForwards() []limatype.PortForward {
 }
 
 func isGuestAgentSocketAccessible(ctx context.Context, client *guestagentclient.GuestAgentClient) bool {
+	// Reconnection holds clientMu while probing. Bound the RPC so a stale guest
+	// connection cannot prevent shutdown from acquiring the same lock.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	_, err := client.Info(ctx)
 	return err == nil
 }

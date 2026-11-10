@@ -100,6 +100,7 @@ func (l *LimaHcsDriver) Configure(ctx context.Context, inst *limatype.Instance) 
 
 	l.Instance = inst
 	l.SSHLocalPort = inst.SSHLocalPort
+	l.sshAddress = inst.SSHAddress
 
 	return &driver.ConfiguredDriver{
 		Driver: l,

@@ -15,7 +15,9 @@ const origin = process.env.CAGE_UI_URL || "http://127.0.0.1:5173";
 const received = [];
 let release,
   fail = false;
+await page.route("**/api/**", route => route.fulfill({ json: { ok: true } }));
 await page.route("**/api/appearance", (route) => route.fulfill({ json: {} }));
+await page.route("**/api/input/paste/start", route => route.fulfill({ json: { available: true, context: "a".repeat(32) } }));
 await page.route("**/api/input/image", async (route) => {
   received.push(route.request().postDataJSON());
   await new Promise((resolve) => {
@@ -23,7 +25,7 @@ await page.route("**/api/input/image", async (route) => {
   });
   await route.fulfill(
     fail
-      ? { status: 502, body: "测试：图片传递失败" }
+      ? { status: 502, contentType: "text/plain; charset=utf-8", body: "测试：图片传递失败" }
       : {
           json: {
             path: "/home/cage/.local/share/cage/attachments/image-test.png",
@@ -81,7 +83,7 @@ const imageEvent = (selector, type, image = true) =>
 try {
   await page.goto(origin + "/image-input-test");
   await page.evaluate(async () => {
-    const [{ default: RFB }, { installRemoteInput }, { sendImage }] =
+    const [{ default: RFB }, { installRemoteInput }, { sendImage, imagePayload }] =
       await Promise.all([
         import("/.generated/novnc/core/rfb.js"),
         import("/src/remote-input.js"),
@@ -105,7 +107,14 @@ try {
     rfb.cagePasteText = (text) =>
       rfb._cageQueueInput(() => rfb._cagePasteText(text));
     let active = true;
-    const input = installRemoteInput(rfb, container, {
+    const input = installRemoteInput({
+      events: rfb,
+      setKeyboardTarget: target => rfb.cageSetKeyboardTarget(target),
+      sendKey: (...key) => rfb.sendKey(...key),
+      focus: () => rfb.focus(),
+      pasteText: text => rfb.cagePasteText(text),
+      runKeyAction: action => rfb._cageQueueInput(() => action((...key) => rfb._cageSendKey(...key))),
+    }, container, {
       mode: () => "mac",
       isActive: () => active,
       insertText: async () => {},
@@ -117,7 +126,7 @@ try {
         rfb.cagePasteContent(
           content,
           async (payload) => {
-            await sendImage(payload, "browser", "tab-1");
+            await sendImage(payload.files ? await imagePayload(payload.files[0]) : payload, "browser", "tab-1");
             order.push("image");
           },
           () => active && Boolean(rfb.target),
@@ -208,7 +217,7 @@ try {
   );
   assert.equal(received[2].target, "terminal");
   fail = true;
-  await imageEvent(".terminal-host", "drop");
+  await imageEvent(".xterm-helper-textarea", "paste");
   await poll(() => received.length === 4);
   await page.keyboard.press("Enter");
   release();

@@ -81,7 +81,7 @@ func (h *rootedHandlers) openParent(rel string) (int, string, error) {
 				unix.Close(fd)
 				return -1, "", unix.EACCES
 			}
-			next, err := unix.Openat(fd, c, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+			next, err := h.openat(fd, c, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
 			unix.Close(fd)
 			if err != nil {
 				return -1, "", err
@@ -114,7 +114,7 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 	if pf.Creat {
 		flags |= unix.O_CREAT
 	}
-	if pf.Trunc {
+	if pf.Trunc && !h.cloud {
 		flags |= unix.O_TRUNC
 	}
 	if pf.Excl {
@@ -131,17 +131,23 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
 	defer unix.Close(dirfd)
 	// O_NONBLOCK: a FIFO would block the server, which handles one request at a time.
 	// It has no effect on regular files, the only ones served.
-	fd, err := unix.Openat(dirfd, base, flags|unix.O_NONBLOCK, mode)
+	fd, err := h.openat(dirfd, base, flags|unix.O_NONBLOCK, mode)
 	if err != nil {
 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
 	}
 	var st unix.Stat_t
-	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
+	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || (h.cloud && st.Nlink != 1) {
 		unix.Close(fd)
 		if err == nil {
 			err = errDenied
 		}
 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
+	}
+	if h.cloud && pf.Trunc {
+		if err := unix.Ftruncate(fd, 0); err != nil {
+			unix.Close(fd)
+			return nil, err
+		}
 	}
 	return os.NewFile(uintptr(fd), r.Filepath), nil
 }
@@ -331,4 +337,12 @@ func (h *rootedHandlers) StatVFS(r *sftp.Request) (*sftp.StatVFS, error) {
 		return nil, err
 	}
 	return statVFS(&st), nil
+}
+
+// Cloud shares stop at nested mounts, including when walking parent directories.
+func (h *rootedHandlers) openat(fd int, name string, flags int, mode uint32) (int, error) {
+	if h.cloud {
+		return cloudOpenat(fd, name, flags, mode)
+	}
+	return unix.Openat(fd, name, flags, mode)
 }

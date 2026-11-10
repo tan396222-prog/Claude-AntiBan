@@ -1,0 +1,24 @@
+--- a/pkg/driver/vz/vz_driver_darwin.go
++++ b/pkg/driver/vz/vz_driver_darwin.go
+@@ -574,7 +574,6 @@
+ 
+ func (l *LimaVzDriver) Stop(ctx context.Context) error {
+ 	logrus.Info("Shutting down VZ")
+-	defer l.removePIDFile()
+ 
+ 	requested := false
+ 	if l.machine.CanRequestStop() {
+@@ -599,7 +598,12 @@
+ 
+ 	// The VM is never stopped forcibly with l.machine.Stop(): that does not give the guest
+ 	// a chance to stop cleanly, and may corrupt the disk.
+-	return l.waitForStopped(gracefulStopTimeout)
++	if err := l.waitForStopped(gracefulStopTimeout); err != nil {
++		// Retain the owner record while the VM may still be running.
++		return err
++	}
++	l.removePIDFile()
++	return nil
+ }
+ 
+ func (l *LimaVzDriver) waitForStopped(timeout time.Duration) error {

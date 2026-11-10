@@ -4,7 +4,6 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from urllib.parse import urlsplit
 
 # Older or minimal container images can still use their normal apt-get install.
 try:
@@ -16,9 +15,7 @@ except ImportError:
     sys.exit(0)
 
 
-MIRRORS = ("https://mirrors.nju.edu.cn/debian-security/", "https://mirrors.ustc.edu.cn/debian-security/")
 SECURITY_LIST = Path("/etc/apt/mirrors/debian-security.list")
-OFFICIAL = ("https://deb.debian.org/debian-security/", "https://security.debian.org/debian-security/")
 
 
 def stock_security_uri(uri):
@@ -27,10 +24,21 @@ def stock_security_uri(uri):
     if uri.startswith("mirror+file:" + str(SECURITY_LIST) + "/"):
         if not SECURITY_LIST.is_file():
             return False
-        return SECURITY_LIST.read_text().strip().rstrip("/") + "/" in OFFICIAL
-    site = urlsplit(uri)
-    return (site.scheme in ("http", "https") and site.netloc in ("deb.debian.org", "security.debian.org")
-            and site.path.startswith("/debian-security/"))
+        return SECURITY_LIST.read_text().startswith("# Cage managed Debian mirrors\n")
+    return False
+
+
+def security_mirrors():
+    if not SECURITY_LIST.is_file():
+        return []
+    lines = SECURITY_LIST.read_text().splitlines()
+    if not lines or lines[0] != "# Cage managed Debian mirrors":
+        return []
+    # Reuse only mirrors selected by the bounded reachability probe. Explicit
+    # official preference and custom sources never cause hidden mirror requests.
+    allowed = ("https://mirrors.nju.edu.cn/debian-security/", "https://mirrors.ustc.edu.cn/debian-security/")
+    return [parts[0].rstrip("/") + "/" for line in lines[1:]
+            if (parts := line.split()) and parts[0].rstrip("/") + "/" in allowed]
 
 
 class Progress(AcquireProgress):
@@ -54,7 +62,7 @@ def fetch(package, version, target):
     hashes = apt_pkg.HashStringList()
     hashes.append(apt_pkg.HashString("SHA256", version.sha256))
     partial = target.parent / "partial" / (target.name + ".cage")
-    for mirror in MIRRORS:
+    for mirror in security_mirrors():
         print(f"Downloading {package} {version.version} from {mirror}", flush=True)
         progress = Progress(package, version.size)
         acquire = apt_pkg.Acquire(progress)
@@ -84,7 +92,7 @@ def prefetch(install_options):
     cache = apt.Cache()
     archives = Path(apt_pkg.config.find_dir("Dir::Cache::archives"))
     apt_pkg.config.set("Acquire::Retries", "0")
-    apt_pkg.config.set("Acquire::https::Timeout", "60")
+    apt_pkg.config.set("Acquire::https::Timeout", "15")
     with apt_pkg.FileLock(str(archives / "lock")):
         for line in plan.splitlines():
             if not line.startswith("'"):

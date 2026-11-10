@@ -31,9 +31,12 @@ async function releaseNames() {
     linux: `Cage-${version}-linux-amd64.deb`,
     linuxSource: linuxDependencies.mihomoSource.file,
     macSource: `mihomo-${macCore}-source.tar.gz`,
+    macGuestSource: `cage-macos-guest-${version}-source.tar.gz`,
     windowsSource: `mihomo-${dependencies.mihomo.version}-source.tar.gz`,
     qemuPrefix: `qemu-${dependencies.qemu.version}-windows-full-source.`,
-    qemuSource: dependencies.qemuSource?.file,
+    qemuSource: `${dependencies.qemuSource.file}.gz`,
+    qemuKeymap: `qemu-keycodemapdb-${dependencies.qemuKeycodemap.version}-source.tar.gz`,
+    qemuChanges: `qemu-${dependencies.qemu.version}-cage-changes-source.tar.gz`,
   };
 }
 
@@ -114,12 +117,13 @@ export async function prepareReleaseAssets({ inputs, output }) {
     if (!mac && !windows && !linux) throw new Error(`No supported package name for VERSION ${names.version}: ${directory}`);
     if (linux && !entries.has(names.linuxSource)) throw new Error(`Missing Linux Mihomo source in SHA256SUMS: ${directory}`);
     if (mac && !entries.has(names.macSource)) throw new Error(`Missing macOS Mihomo source in SHA256SUMS: ${directory}`);
+    if (mac && !entries.has(names.macGuestSource)) throw new Error(`Missing macOS guest corresponding source in SHA256SUMS: ${directory}`);
     if (windows && (!entries.has(names.windowsSource) || ![...entries.keys()].some(name => isQemuArchive(name, names)))) {
       throw new Error(`Windows release requires its Mihomo and complete QEMU source archives in the same SHA256SUMS: ${directory}`);
     }
     for (const [name, digest] of entries) {
       const installer = name === names.mac || name === names.windows || name === names.linux;
-      if (!installer && name !== names.macSource && name !== names.windowsSource && name !== names.linuxSource && name !== names.qemuSource && !isQemuArchive(name, names)) {
+      if (!installer && ![names.macSource, names.macGuestSource, names.windowsSource, names.linuxSource, names.qemuSource, names.qemuKeymap, names.qemuChanges].includes(name) && !isQemuArchive(name, names)) {
         throw new Error(`Unsupported asset or version in SHA256SUMS: ${name}`);
       }
       const existing = all.get(name);

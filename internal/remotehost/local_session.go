@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -27,7 +26,7 @@ func LocalSession(ctx context.Context, origin string, manifest PublicManifest, j
 			return nil, errors.New("本机服务地址已改变")
 		}
 		conn, err := dial.DialContext(ctx, "tcp4", endpoint)
-		if errors.Is(err, syscall.ECONNREFUSED) {
+		if errors.Is(err, connectionRefused) {
 			cancel()
 		}
 		return conn, err

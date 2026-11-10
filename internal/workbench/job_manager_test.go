@@ -3,6 +3,7 @@ package workbench
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -134,7 +135,7 @@ func TestJobManagerRepeatedStopCanRequestLogout(t *testing.T) {
 				close(started)
 				<-release
 				if stopFails {
-					return errors.New("stop failed")
+					return errors.New("测试模拟：环境停止失败")
 				}
 				return nil
 			})
@@ -161,7 +162,7 @@ func TestJobManagerRepeatedStopCanRequestLogout(t *testing.T) {
 			}
 			state := awaitJobIdle(t, &manager)
 			if stopFails {
-				if locked.Load() != 0 || state.Error != "stop failed" {
+				if locked.Load() != 0 || state.Error != "测试模拟：环境停止失败" {
 					t.Fatalf("failed stop locked account: %+v count=%d", state, locked.Load())
 				}
 			} else if locked.Load() != 1 || state.Error != "" {
@@ -248,7 +249,7 @@ func TestJobManagerFinalizationAndOutput(t *testing.T) {
 		t.Fatal("output without an execution changed state")
 	}
 	_, err := manager.submit(&operation, "stop", 0, nil, func() error {
-		return errors.New("account could not be locked")
+		return errors.New("无法写入账户锁定状态")
 	}, func() error {
 		_, _ = manager.execution().Write([]byte(strings.Repeat("a\n", 12500) + "tail"))
 		return nil
@@ -257,8 +258,23 @@ func TestJobManagerFinalizationAndOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := awaitJobIdle(t, &manager)
-	if state.Error != "account could not be locked" || len(state.Log) != 24000 || !strings.HasSuffix(state.Log, "tail\n") {
+	if state.Error != "无法写入账户锁定状态" || len(state.Log) > 24000 || !strings.Contains(state.Log, "12499 additional times") || !strings.HasSuffix(state.Log, "tail\n") {
 		t.Fatalf("finalization error or bounded log lost: %+v", state)
+	}
+	_, err = manager.submit(&operation, "stop", 0, nil, nil, func() error {
+		var output strings.Builder
+		for i := 0; i < 4000; i++ {
+			fmt.Fprintf(&output, "different line %d\n", i)
+		}
+		_, _ = manager.execution().Write([]byte(output.String()))
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state = awaitJobIdle(t, &manager)
+	if len(state.Log) != 24000 || !strings.HasSuffix(state.Log, "different line 3999\n") {
+		t.Fatal("distinct output lost its bound or final line")
 	}
 }
 

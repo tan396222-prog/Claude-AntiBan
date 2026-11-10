@@ -48,5 +48,12 @@
     "prefix": "qemu-e470268ff446ec56728215a987ed166d5ed8fb64/",
     "file": "qemu-e470268ff446ec56728215a987ed166d5ed8fb64-source.tar",
     "hash": "b16ca2d09d66de17269f4b85d7823e82e8a42c591fc7b75047047170d095da03"
+  },
+  "qemuKeycodemap": {
+    "version": "f5772a62ec52591ff6870b7e8ef32482371f22c6",
+    "file": "keycodemapdb.tar.gz",
+    "url": "https://github.com/qemu/keycodemapdb/archive/f5772a62ec52591ff6870b7e8ef32482371f22c6.tar.gz",
+    "algorithm": "SHA256",
+    "hash": "d014b53382dbb17b8196ad12f50de7f20d0ef1b9f7d54b0be51a6cbb14209195"
   }
 }

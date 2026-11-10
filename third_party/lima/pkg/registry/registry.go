@@ -32,7 +32,7 @@ type ExternalDriver struct {
 }
 
 var (
-	internalDrivers = make(map[string]driver.Driver)
+	internalDrivers = make(map[string]func() driver.Driver)
 	ExternalDrivers = make(map[string]*ExternalDriver)
 )
 
@@ -65,7 +65,7 @@ func CheckInternalOrExternal(name string) string {
 }
 
 func Get(name string) (*ExternalDriver, driver.Driver, bool) {
-	internalDriver, exists := internalDrivers[name]
+	factory, exists := internalDrivers[name]
 	if !exists {
 		if err := discoverDrivers(); err != nil {
 			logrus.Warnf("Error discovering drivers: %v", err)
@@ -74,8 +74,9 @@ func Get(name string) (*ExternalDriver, driver.Driver, bool) {
 		if exists {
 			return externalDriver, nil, exists
 		}
+		return nil, nil, false
 	}
-	return nil, internalDriver, exists
+	return nil, factory(), true
 }
 
 func registerExternalDriver(name, path string) {
@@ -188,10 +189,11 @@ func isExecutable(mode os.FileMode) bool {
 	return mode&0o111 != 0
 }
 
-func Register(ctx context.Context, driver driver.Driver) {
-	name := driver.Info(ctx).Name
+// Register keeps a constructor so each lookup owns its driver state.
+func Register(ctx context.Context, factory func() driver.Driver) {
+	name := factory().Info(ctx).Name
 	if _, exists := internalDrivers[name]; exists {
 		return
 	}
-	internalDrivers[name] = driver
+	internalDrivers[name] = factory
 }

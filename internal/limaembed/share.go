@@ -2,7 +2,7 @@ package limaembed
 
 import (
 	"crypto/sha256"
-	"embed"
+	_ "embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -12,24 +12,43 @@ import (
 	"strings"
 )
 
-// What Lima finds in <prefix>/share/lima next to limactl: the guest agent and
-// the templates. Put in by the Makefile; see assets/README.
-//
-//go:embed all:assets
-var assets embed.FS
-
 // Share is Lima's share/lima, written out of the binary.
 type Share struct {
-	// Dir holds templates/ and the guest agent.
-	Dir string
-	// GuestAgent is the guest agent for Linux guests of this host's
-	// architecture, gzipped: Lima decompresses it.
-	GuestAgent string
+	// Dir holds templates/ and the bundled guest agents.
+	Dir         string
+	guestAgents map[string]string
+}
+
+// Cage owns this pin independently of Lima's periodically regenerated templates.
+//
+//go:embed host-images/ubuntu-22.04.yaml
+var ubuntu2204Image []byte
+
+// ReadImageTemplate returns the pinned images bundled with this application.
+func ReadImageTemplate(system string) ([]byte, error) {
+	switch system {
+	case "ubuntu-22.04":
+		return ubuntu2204Image, nil
+	case "debian-12", "debian-13", "ubuntu-24.04":
+		return fs.ReadFile(assets, "assets/templates/_images/"+system+".yaml")
+	default:
+		return nil, fmt.Errorf("unsupported host image template %q", system)
+	}
 }
 
 // Templates is where Lima reads templates from (LIMA_TEMPLATES_PATH).
 func (s *Share) Templates() string {
 	return filepath.Join(s.Dir, "templates")
+}
+
+// GuestAgent returns only helpers that were extracted from this executable.
+// An older installation may have left other binaries in the same directory.
+func (s *Share) GuestAgent(guestOS, arch string) (string, error) {
+	name := "lima-guestagent." + guestOS + "-" + arch + ".gz"
+	if agent, ok := s.guestAgents[name]; ok {
+		return agent, nil
+	}
+	return "", fmt.Errorf("this build does not include the Lima guest agent for %s/%s", guestOS, arch)
 }
 
 // ErrNoAssets is returned by WriteShare when agent-vm was built without
@@ -40,12 +59,15 @@ var ErrNoAssets = errors.New("this agent-vm was built without Lima's guest agent
 // missing or differs from the embedded copy, and returns where they are. The
 // files are checked on every call: a damaged guest agent never reaches a VM.
 func WriteShare(dir string) (*Share, error) {
-	agent := "lima-guestagent.Linux-" + guestArch() + ".gz"
-	if _, err := fs.Stat(assets, "assets/"+agent); err != nil {
+	return writeShare(dir, assets)
+}
+
+func writeShare(dir string, files fs.FS) (*Share, error) {
+	if _, err := fs.Stat(files, "assets/lima-guestagent.Linux-"+guestArch()+".gz"); err != nil {
 		return nil, ErrNoAssets
 	}
-	share := filepath.Join(dir, "share", "lima")
-	err := fs.WalkDir(assets, "assets", func(p string, d fs.DirEntry, err error) error {
+	share := &Share{Dir: filepath.Join(dir, "share", "lima"), guestAgents: make(map[string]string)}
+	err := fs.WalkDir(files, "assets", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -53,20 +75,26 @@ func WriteShare(dir string) (*Share, error) {
 		if rel == "README" {
 			return nil
 		}
-		dst := filepath.Join(share, filepath.FromSlash(rel))
+		dst := filepath.Join(share.Dir, filepath.FromSlash(rel))
 		if d.IsDir() {
 			return os.MkdirAll(dst, 0o700)
 		}
-		want, err := assets.ReadFile(p)
+		want, err := fs.ReadFile(files, p)
 		if err != nil {
 			return err
 		}
-		return writeIfChanged(dst, want)
+		if err := writeIfChanged(dst, want); err != nil {
+			return err
+		}
+		if strings.HasPrefix(d.Name(), "lima-guestagent.") && strings.HasSuffix(d.Name(), ".gz") {
+			share.guestAgents[d.Name()] = dst
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("writing Lima's files to %s: %w", share, err)
+		return nil, fmt.Errorf("writing Lima's files to %s: %w", share.Dir, err)
 	}
-	return &Share{Dir: share, GuestAgent: filepath.Join(share, agent)}, nil
+	return share, nil
 }
 
 func writeIfChanged(dst string, want []byte) error {

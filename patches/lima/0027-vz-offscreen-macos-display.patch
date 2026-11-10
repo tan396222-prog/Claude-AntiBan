@@ -1,0 +1,114 @@
+diff --git a/pkg/driver/vz/vm_darwin.go b/pkg/driver/vz/vm_darwin.go
+index b737325..410cbf2 100644
+--- a/pkg/driver/vz/vm_darwin.go
++++ b/pkg/driver/vz/vm_darwin.go
+@@ -629,7 +629,7 @@ func attachDisks(ctx context.Context, inst *limatype.Instance, vmConfig *vz.Virt
+ 
+ func attachDisplay(inst *limatype.Instance, vmConfig *vz.VirtualMachineConfiguration) error {
+ 	switch *inst.Config.Video.Display {
+-	case "vz", "default":
++	case "vz", "default", "offscreen":
+ 		var graphicsDeviceConfiguration vz.GraphicsDeviceConfiguration
+ 		if *inst.Config.OS == limatype.DARWIN {
+ 			var err error
+diff --git a/pkg/driver/vz/vz_driver_darwin.go b/pkg/driver/vz/vz_driver_darwin.go
+index 0430da1..364aa17 100644
+--- a/pkg/driver/vz/vz_driver_darwin.go
++++ b/pkg/driver/vz/vz_driver_darwin.go
+@@ -339,9 +339,9 @@ func validateConfig(cfg *limatype.LimaYAML) error {
+ 	}
+ 
+ 	switch videoDisplay := *cfg.Video.Display; videoDisplay {
+-	case "vz", "default", "none":
++	case "vz", "default", "none", "offscreen":
+ 	default:
+-		logrus.Warnf("field `video.display` must be `vz`, `default`, or `none` for VZ driver , got %#q", videoDisplay)
++		logrus.Warnf("field `video.display` must be `vz`, `default`, `none`, or `offscreen` for VZ driver, got %#q", videoDisplay)
+ 	}
+ 	var vzOpts limatype.VZOpts
+ 	if err := limayaml.Convert(cfg.VMOpts[limatype.VZ], &vzOpts, "vmOpts.vz"); err != nil {
+diff --git a/pkg/driver/vz/vz_driver_darwin_test.go b/pkg/driver/vz/vz_driver_darwin_test.go
+index e751919..20eaa71 100644
+--- a/pkg/driver/vz/vz_driver_darwin_test.go
++++ b/pkg/driver/vz/vz_driver_darwin_test.go
+@@ -9,15 +9,34 @@ import (
+ 	"errors"
+ 	"os"
+ 	"path/filepath"
++	"runtime"
+ 	"testing"
+ 	"time"
+ 
+ 	"gotest.tools/v3/assert"
+ 
++	applevz "github.com/Code-Hex/vz/v3"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
+ )
+ 
++func TestOffscreenGuestDisplay(t *testing.T) {
++	if runtime.GOARCH != "arm64" {
++		t.Skip("macOS guests require Apple Silicon")
++	}
++	inst := &limatype.Instance{Config: &limatype.LimaYAML{OS: new(limatype.DARWIN)}}
++	inst.Config.Video.Display = new("offscreen")
++	boot, err := newMacOSBootLoader()
++	assert.NilError(t, err)
++	config, err := applevz.NewVirtualMachineConfiguration(boot, 2, 4<<30)
++	assert.NilError(t, err)
++	assert.NilError(t, attachDisplay(inst, config))
++
++	driver := &LimaVzDriver{Instance: inst}
++	assert.Equal(t, driver.Info(t.Context()).Features.CanRunGUI, false)
++	assert.ErrorContains(t, driver.RunGUI(t.Context()), "RunGUI is not supported")
++}
++
+ func TestWaitForStopped(t *testing.T) {
+ 	t.Run("returns nil after the VM has stopped", func(t *testing.T) {
+ 		l := &LimaVzDriver{machine: &virtualMachineWrapper{}}
+diff --git a/pkg/limayaml/validate.go b/pkg/limayaml/validate.go
+index 33cefd5..e03a841 100644
+--- a/pkg/limayaml/validate.go
++++ b/pkg/limayaml/validate.go
+@@ -64,6 +64,10 @@ func Validate(y *limatype.LimaYAML, warn bool) error {
+ 		errs = errors.Join(errs, fmt.Errorf("field `arch` must be one of %v; got %#q", limatype.ArchTypes, *y.Arch))
+ 	}
+ 
++	if y.Video.Display != nil && *y.Video.Display == "offscreen" && (*y.OS != limatype.DARWIN || y.VMType == nil || *y.VMType != limatype.VZ) {
++		errs = errors.Join(errs, errors.New("video.display offscreen requires a macOS guest with the VZ driver"))
++	}
++
+ 	if y.User.Shell != nil {
+ 		shell := *y.User.Shell
+ 		if *y.OS == limatype.WINDOWS {
+diff --git a/pkg/limayaml/validate_test.go b/pkg/limayaml/validate_test.go
+index 8040c29..79e9f88 100644
+--- a/pkg/limayaml/validate_test.go
++++ b/pkg/limayaml/validate_test.go
+@@ -23,6 +23,26 @@ func TestValidateEmpty(t *testing.T) {
+ 	assert.Error(t, err, "field `images` must be set")
+ }
+ 
++func TestOffscreenDisplayRequiresMacOSAndVZ(t *testing.T) {
++	for _, tc := range []struct{ os, driver string }{
++		{limatype.DARWIN, limatype.VZ},
++		{limatype.LINUX, limatype.VZ},
++		{limatype.DARWIN, limatype.QEMU},
++	} {
++		t.Run(tc.os+"-"+tc.driver, func(t *testing.T) {
++			body := fmt.Sprintf("os: %s\nvmType: %s\nvideo: {display: offscreen}\nimages: [{location: /}]\n", tc.os, tc.driver)
++			y, err := Load(t.Context(), []byte(body), "lima.yaml")
++			assert.NilError(t, err)
++			err = Validate(y, false)
++			if tc.os == limatype.DARWIN && tc.driver == limatype.VZ {
++				assert.NilError(t, err)
++			} else {
++				assert.ErrorContains(t, err, "offscreen requires a macOS guest")
++			}
++		})
++	}
++}
++
+ func TestValidateMinimumLimaVersion(t *testing.T) {
+ 	images := `images: [{"location": "/"}]`
+ 

@@ -33,13 +33,19 @@ function inUse(bundle) {
     throw error;
   }
 }
+function intact(bundle) {
+  try {
+    execFileSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', bundle], { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
 
-export async function cleanupApps({ keep, roots, onInUse = () => {} }) {
+export async function cleanupApps({ keep, roots, onInUse = () => {}, onModified = () => {} }) {
   if (!keep.length)
     throw new Error("At least one verified Cage.app must be kept.");
   const retained = new Set();
   for (const bundle of keep) {
-    if (!isCage(bundle)) throw new Error(`Invalid replacement App: ${bundle}`);
+    if (!isCage(bundle) || !intact(bundle)) throw new Error(`Invalid replacement App: ${bundle}`);
     retained.add(await realpath(bundle));
   }
   const removed = [];
@@ -56,6 +62,10 @@ export async function cleanupApps({ keep, roots, onInUse = () => {} }) {
     if (retained.has(canonical)) return;
     if (directory.endsWith(".app")) {
       if (isCage(directory)) {
+        if (!intact(directory)) {
+          onModified(directory);
+          return;
+        }
         if (inUse(directory)) {
           onInUse(directory);
           return;
@@ -91,6 +101,7 @@ if (
   for (const bundle of await cleanupApps({
     keep, roots,
     onInUse: (bundle) => console.error(`Old Cage App is still running; quit it and rerun cleanup: ${bundle}`),
+    onModified: (bundle) => console.error(`旧应用包含修改内容或无法验证完整性，文件已保留：${bundle}`),
   }))
     console.log(`Removed old App: ${bundle}`);
 }

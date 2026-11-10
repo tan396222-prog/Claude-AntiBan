@@ -1,8 +1,10 @@
 package workbench
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/sylvinus/agent-vm/internal/cage"
+	"github.com/sylvinus/agent-vm/internal/guestos"
 	"io"
 	"net/http"
 	"os"
@@ -10,6 +12,64 @@ import (
 	"strings"
 	"testing"
 )
+
+func TestEnvironmentUpgradeSeparatesPrivateLegacyWorkspaceFromVMIdentity(t *testing.T) {
+	home, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, system := range []string{"linux", "macos", "windows"} {
+		t.Run(system, func(t *testing.T) {
+			s := testServer(t)
+			s.profile = filepath.Join(home, ".claude-cage", system)
+			legacy := s.profile + "-workspace"
+			selected := filepath.Join(home, "projects", system)
+			for _, path := range []string{s.profile, legacy, selected} {
+				if err := os.MkdirAll(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s.preferences.Workspace = selected
+			if system == "macos" {
+				s.macosGuest = &guestos.MacOSProfile{Instance: "mac", User: "guest"}
+			} else if system == "windows" {
+				s.windowsGuest = &guestos.WindowsProfile{}
+			}
+			if err := writePrivate(filepath.Join(s.profile, "environment.json"), map[string]string{"directory": legacy}); err != nil {
+				t.Fatal(err)
+			}
+			identity := cage.InstanceName(s.profile, legacy)
+			disk := filepath.Join(s.profile, "state", "lima", identity, "disk")
+			if err := writePrivate(filepath.Join(filepath.Dir(disk), "lima.yaml"), map[string]string{}); err != nil {
+				t.Fatal(err)
+			}
+			original := []byte("persistent disk and existing project data")
+			for _, file := range []string{disk, filepath.Join(legacy, "project.txt"), filepath.Join(s.profile, "account.json")} {
+				if err := os.WriteFile(file, original, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for restart := 0; restart < 2; restart++ {
+				if err := s.prepareEnvironment(); err != nil {
+					t.Fatal(err)
+				}
+				if s.environmentDir() != selected || s.workspace() != selected || cage.InstanceName(s.profile, selected) != identity {
+					t.Fatal("startup changed the VM identity or selected project")
+				}
+				if _, err := validateWorkspace(legacy, s.profile); err == nil {
+					t.Fatal("legacy location bypassed private-profile protection")
+				}
+				for _, file := range []string{disk, filepath.Join(legacy, "project.txt"), filepath.Join(s.profile, "account.json")} {
+					if data, err := os.ReadFile(file); err != nil || !bytes.Equal(data, original) {
+						t.Fatalf("startup changed existing personal data: %s %v", file, err)
+					}
+				}
+			}
+		})
+	}
+}
 
 type browserTransport func(*http.Request) (*http.Response, error)
 

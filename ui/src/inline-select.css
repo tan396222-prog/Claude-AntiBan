@@ -16,9 +16,11 @@
 .inline-select-trigger svg { flex: none; }
 .inline-select-trigger[aria-expanded="true"] svg { transform: rotate(180deg); }
 .inline-select-list {
-  position: relative;
+  position: fixed;
+  z-index: 10000;
   display: grid;
-  margin-top: 3px;
+  box-sizing: border-box;
+  margin: 0;
   padding: 3px;
   max-height: min(14rem, 32vh);
   overflow: auto;
@@ -29,6 +31,8 @@
   font-size: inherit;
   font-weight: 400;
   text-align: start;
+  box-shadow: 0 8px 24px #00000020, 0 2px 6px #0000000c;
+  overscroll-behavior: contain;
 }
 .inline-select-list [role="option"] {
   display: flex;

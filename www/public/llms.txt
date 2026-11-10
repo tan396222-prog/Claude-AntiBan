@@ -1,0 +1,15 @@
+# Cage
+
+> Cage is a local and remote isolated development workbench. External agents can help users download, install, configure and diagnose it through the versioned JSON CLI.
+
+- [Agent guide](../../docs/guide/agent.md): Read this first. Installation paths, protocol discovery, JSON input, tasks, recovery and user authorization boundaries.
+- [Full agent guide](../../docs/guide/agent.md): Plain-text copy of the same source.
+- [User guide](../../docs/guide/agent.md): Rendered guide.
+- [Download helper](https://raw.githubusercontent.com/tan396222-prog/Claude-AntiBan/main/www/public/agent-bootstrap.mjs): Node.js 20+, public release discovery and verified package download. Returns an installation plan; does not install.
+- [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases): Published packages and platform-specific validation limits.
+
+Discover installed capabilities before changing anything: <installed CLI> agent capabilities
+Current source documentation may describe features absent from published releases.
+The full CLI defaults to the local workload at config_path. Use --scope desktop for client configuration and --scope selected --connection GENERATION for the chosen workload. The lightweight client defaults to --scope client. Remote SSH execution is also supported.
+Run agent routes against the live listener to discover its registered HTTP routes. agent request and agent socket use the same API and permissions as the UI; native.submit invokes the actual desktop bridge and clientPreferences accesses the same window storage.
+Preserve existing profile data, accounts, projects and VM disks. Never disable network isolation or system security checks to complete setup.

@@ -1,6 +1,8 @@
 package workbench
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -12,7 +14,7 @@ func (s *Server) browser(w http.ResponseWriter, r *http.Request) {
 		action = "tabs"
 	}
 	switch action {
-	case "tabs", "split", "new", "activate", "close", "navigate", "back", "forward", "reload", "editor", "editor-restart", "download-retry", "upload-finish", "upload-cancel", "resize", "insert-text", "copy-context":
+	case "tabs", "split", "new", "activate", "close", "navigate", "back", "forward", "reload", "editor", "editor-restart", "download-retry", "upload-finish", "upload-cancel", "resize", "insert-text", "copy-context", "copy", "cut", "cookies", "settings", "extensions", "internal-page", "info":
 	default:
 		http.NotFound(w, r)
 		return
@@ -48,6 +50,24 @@ func (s *Server) remoteInput(w http.ResponseWriter, r *http.Request) {
 	// graphical sessions; it does not create another guest listener.
 	var input browserInput
 	if !readJSON(w, r, &input) {
+		return
+	}
+	if s.windowsGuest != nil && input.Target == "desktop" {
+		if input.ID != "desktop" || len(input.Text) > 8192 {
+			http.Error(w, "输入目标或文字无效", 400)
+			return
+		}
+		body, _ := json.Marshal(input)
+		var value map[string]any
+		_ = json.Unmarshal(body, &value)
+		var output map[string]any
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		if err := s.windowsDesktopRequest(ctx, "ime", value, &output); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		jsonReply(w, output)
 		return
 	}
 	data, err := s.browserAction(r.Context(), "ime", &input)

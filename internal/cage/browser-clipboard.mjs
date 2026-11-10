@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 // This runs before site scripts, in each new document's main world. The binding
 // and token stay in the closure. Existing documents expose only captured
 // function references to CDP for native-code verification before installation.
-function prepareCopies(bindingName, token, contextSetter, limit) {
+function prepareCopies(bindingName, token, contextSetter, limit, includeChanges) {
   const emit = globalThis[bindingName];
   delete globalThis[bindingName];
   if (typeof emit !== "function") return;
@@ -58,6 +58,8 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
   ).get;
   const getSelection = Document.prototype.getSelection;
   const selectionText = Selection.prototype.toString;
+  const selectionCollapsed = descriptor(Selection.prototype, "isCollapsed").get;
+  const schedule = globalThis.setTimeout;
   const nativeFunctions = {
     "": emit,
     apply,
@@ -93,6 +95,8 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
     "get selectionEnd#textarea": textareaEnd,
     getSelection,
     toString: selectionText,
+    "get isCollapsed": selectionCollapsed,
+    setTimeout: schedule,
   };
   const plain = (value) => {
     const type = apply(lower, value, []);
@@ -118,11 +122,15 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
         context && current() && apply(activated, activation, [])
           ? { epoch, context }
           : null;
-      const selectedControlText = () => {
+      const focusedElement = () => {
         let element = apply(activeElement, document, []);
         let root;
         while (element && (root = apply(shadowRoot, element, [])))
           element = apply(shadowActiveElement, root, []);
+        return element;
+      };
+      const selectedControlText = () => {
+        const element = focusedElement();
         if (!element) return;
         const tag = apply(tagName, element, []);
         if (tag !== "TEXTAREA" && tag !== "INPUT") return;
@@ -150,22 +158,39 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
         const selection = apply(getSelection, document, []);
         return selection && apply(selectionText, selection, []);
       };
+      const hasCopySelection = () => {
+        const element = focusedElement();
+        if (!element) return false;
+        const tag = apply(tagName, element, []);
+        if (tag === "INPUT" || tag === "TEXTAREA") {
+          if (tag === "INPUT") {
+            const type = apply(inputType, element, []);
+            if (type !== "text" && type !== "search" && type !== "url" && type !== "tel") return false;
+          }
+          const start = apply(tag === "INPUT" ? inputStart : textareaStart, element, []);
+          const end = apply(tag === "INPUT" ? inputEnd : textareaEnd, element, []);
+          return start !== null && end > start;
+        }
+        const selection = apply(getSelection, document, []);
+        return selection && !apply(selectionCollapsed, selection, []);
+      };
       const send = (text, started) => {
         if (
           started === null ||
           epoch !== started.epoch ||
           !current() ||
-          typeof text !== "string" ||
-          text.length > limit
+          !includeChanges && (typeof text !== "string" || text.length > limit)
         )
           return;
+        const content = typeof text === "string" && text.length <= limit
+          ? ',"text":' + stringify(text)
+          : ',"changed":true';
         emit(
           '{"token":"' +
             token +
             '","context":' +
             stringify(started.context) +
-            ',"text":' +
-            stringify(text) +
+            content +
             "}",
         );
       };
@@ -229,7 +254,9 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
                 },
               });
               const promise = apply(write, this, [items]);
-              if (started === null || items.length !== 1) return promise;
+              if (started === null) return promise;
+              if (includeChanges) return watch(promise, undefined, started);
+              if (items.length !== 1) return promise;
               let text,
                 written = false;
               const completed = () => {
@@ -297,16 +324,27 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
           return result;
         },
       });
-      apply(addListener, document, [
-        "copy",
+      const copied =
         (event) => {
-          if (operation && event.isTrusted) {
+          if (!event.isTrusted) return;
+          if (operation && !operation.native) {
             operation.event = event;
             operation.data = apply(clipboardData, event, []);
+          } else if (includeChanges) {
+            const copy = { native: true, event, data: apply(clipboardData, event, []), started: begin(), selected: hasCopySelection() };
+            operation = copy;
+            // The default copy runs after the DOM event. A trusted no-selection
+            // or password-field event must never export an older clipboard.
+            apply(schedule, globalThis, [() => {
+              if (operation === copy) operation = undefined;
+              if (apply(prevented, event, [])) {
+                if (typeof copy.text === "string") send(copy.text, copy.started);
+              } else if (copy.selected) send(undefined, copy.started);
+            }, 0]);
           }
-        },
-        true,
-      ]);
+        };
+      apply(addListener, document, ["copy", copied, true]);
+      if (includeChanges) apply(addListener, document, ["cut", copied, true]);
       define(documentPrototype, "execCommand", {
         configurable: true,
         writable: true,
@@ -317,7 +355,7 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
           if (apply(lower, name, []) !== "copy" || this !== document)
             return apply(exec, this, [name, ...args]);
           const parent = operation;
-          const copy = { started: begin() };
+          const copy = { started: begin(), selected: includeChanges && hasCopySelection() };
           operation = copy;
           let result;
           try {
@@ -326,12 +364,15 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
             operation = parent;
           }
           if (result && copy.event) {
-            if (apply(prevented, copy.event, [])) send(copy.text, copy.started);
+            if (apply(prevented, copy.event, [])) {
+              if (typeof copy.text === "string") send(copy.text, copy.started);
+            }
             else {
               // Chromium's default DOM copy may add image alt text or transform
               // whitespace. Text controls have an exact selection representation.
               const text = selectedControlText();
               if (text) send(text, copy.started);
+              else if (copy.selected) send(undefined, copy.started);
             }
           }
           return result;
@@ -342,9 +383,10 @@ function prepareCopies(bindingName, token, contextSetter, limit) {
 }
 
 export class BrowserClipboard {
-  constructor(cdp, onCopy) {
+  constructor(cdp, onCopy, { includeChanges = false } = {}) {
     this.cdp = cdp;
     this.onCopy = onCopy;
+    this.includeChanges = includeChanges;
     this.sessions = new Map();
     this.copyContexts = new Map();
   }
@@ -369,7 +411,7 @@ export class BrowserClipboard {
       await this.cdp("Page.enable", {}, sessionId);
       await this.cdp("Runtime.enable", {}, sessionId);
       await this.cdp("Runtime.addBinding", { name: state.name }, sessionId);
-      const source = `(${prepareCopies})(${JSON.stringify(state.name)},${JSON.stringify(state.token)},${JSON.stringify(state.contextSetter)},65536)`;
+      const source = `(${prepareCopies})(${JSON.stringify(state.name)},${JSON.stringify(state.token)},${JSON.stringify(state.contextSetter)},65536,${this.includeChanges})`;
       await this.cdp(
         "Page.addScriptToEvaluateOnNewDocument",
         { source: `(${source})?.install()` },
@@ -537,7 +579,7 @@ export class BrowserClipboard {
     ) {
       void this.attach(p.sessionId, state.tabId).catch(() => {});
     } else if (event.method === "Target.detachedFromTarget") {
-      this.sessions.delete(p.sessionId);
+      this.detachSession(p.sessionId);
     } else if (event.method === "Runtime.executionContextCreated") {
       if (p.context?.auxData?.isDefault)
         state.contexts.set(p.context.id, p.context.auxData.frameId);
@@ -572,16 +614,19 @@ export class BrowserClipboard {
         value?.token !== state.token ||
         typeof value.context !== "string" ||
         value.context.length > 64 ||
-        typeof value.text !== "string" ||
-        value.text.length > 65536
+        !(typeof value.text === "string" && value.text.length <= 65536 || this.includeChanges && value.changed === true && value.text === undefined)
       )
         return;
       this.onCopy({
         id: state.tabId,
-        text: value.text,
+        ...(typeof value.text === "string" ? { text: value.text } : { changed: true }),
         context: value.context,
       });
     }
+  }
+
+  detachSession(id) {
+    this.sessions.delete(id);
   }
 
   detachTab(id) {

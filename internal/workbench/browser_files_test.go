@@ -168,6 +168,15 @@ func TestCompletedDownloadsRemainAvailableAfterVMStops(t *testing.T) {
 
 func TestNativeSaveUsesAuthenticatedControllerAndPersistsChosenPath(t *testing.T) {
 	s := testServer(t)
+	lock, err := openControllerLock(s.profile, os.O_CREATE|os.O_RDWR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := lockController(lock); err != nil {
+		t.Fatal(err)
+	}
+	defer unlockController(lock)
 	server := httptest.NewServer(s.handler())
 	defer server.Close()
 	endpoint, _ := url.Parse(server.URL)

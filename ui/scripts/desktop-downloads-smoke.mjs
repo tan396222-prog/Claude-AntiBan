@@ -44,6 +44,13 @@ try {
   await page.getByRole("button", { name: "下载文件", exact: true }).click();
   await dialog.getByText(item.path, { exact: true }).waitFor();
   assert.equal(calls.filter((call) => call.action === "saveBrowserDownload").length, 1, "history reopened a save dialog");
+  const openError = "文件打开关联未能完成，请在 Cage 下载列表中打开文件。";
+  downloads = [{ ...item, openError }];
+  await dialog.getByText(openError, { exact: true }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "下载文件", exact: true }).getAttribute("title"), "有下载需要处理，点击查看");
+  await dialog.getByText(item.path, { exact: true }).waitFor();
+  downloads = [item];
+  await dialog.getByText(openError, { exact: true }).waitFor({ state: "hidden" });
   saved = [];
   downloads = [{ ...item, state: "failed", retryable: true, path: "", error: "共享目录暂时不可写" }];
   await page.reload();
@@ -52,5 +59,5 @@ try {
   await waitFor(() => retries === 1);
   assert.equal(await dialog.getByRole("button", { name: "另存为…", exact: true }).count(), 0);
   assert.deepEqual(errors, []);
-  console.log("PASS: Desktop instant export, native Save As cancel retains fallback, reveal, history does not reprompt, failed export uses Desktop retry");
+  console.log("PASS: Desktop instant export, native Save As cancel retains fallback, reveal, history does not reprompt, saved-file open warning and recovery, failed export uses Desktop retry");
 } finally { await browser.close(); }

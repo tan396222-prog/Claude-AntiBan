@@ -1,0 +1,209 @@
+--- a/pkg/reversesshfs/cloud.go
++++ b/pkg/reversesshfs/cloud.go
+@@ -8,7 +8,6 @@
+ 	"os"
+ 	"path"
+ 	"path/filepath"
+-	"strings"
+ 	"sync"
+ 
+ 	"github.com/pkg/sftp"
+@@ -27,7 +26,7 @@
+ 
+ // OpenCloudShare expects an absolute, symlink-resolved path supplied by the local picker.
+ func OpenCloudShare(directory string, readOnly bool) (*CloudShare, error) {
+-	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || filepath.Dir(directory) == directory || CloudPathHidden(filepath.ToSlash(directory)) {
++	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || filepath.Dir(directory) == directory {
+ 		return nil, os.ErrPermission
+ 	}
+ 	sys, err := openCloudRoot(directory)
+@@ -84,33 +83,6 @@
+ 	return nil
+ }
+ 
+-// CloudPathHidden reports whether the file policy withholds this relative
+-// path, including credential stores, Git history and host hooks.
+-// This filename policy cannot identify secrets embedded in ordinary source.
+-func CloudPathHidden(rel string) bool {
+-	for _, name := range strings.Split(rel, "/") {
+-		n := FoldName(name)
+-		switch n {
+-		case ".git", ".hg", ".sl", ".jj", ".ssh", ".gnupg", ".aws", ".kube", ".azure", ".docker", ".config", ".claude-cage", ".agent-vm", ".lima",
+-			".env", ".envrc", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials", ".gitconfig", ".gitmodules",
+-			".claude", ".codex", ".cursor", ".vscode", ".idea", ".zed", ".gemini", ".devcontainer", ".devcontainer.json",
+-			".dir-locals.el", ".mcp.json", ".githooks", ".husky", ".pre-commit-config.yaml",
+-			".yarn", ".yarnrc.yml", ".pnpmfile.cjs", ".cargo", ".lfsconfig", ".mise", "mise.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml",
+-			"lefthook.yml", ".lefthook.yml", "lefthook.yaml", ".lefthook.yaml", "lefthook-local.yml", ".lefthook-local.yml",
+-			"..namedfork", "desktop.ini", ".ds_store":
+-			return true
+-		}
+-		if strings.HasPrefix(n, ".env.") || strings.HasPrefix(n, "id_rsa") || strings.HasPrefix(n, "id_ed25519") || strings.HasPrefix(n, "id_ecdsa") || strings.HasPrefix(n, "id_dsa") {
+-			return true
+-		}
+-		switch path.Ext(n) {
+-		case ".pem", ".key", ".p12", ".pfx", ".ppk", ".lnk", ".url", ".scf", ".library-ms", ".searchconnector-ms":
+-			return true
+-		}
+-	}
+-	return false
+-}
+-
+ // Use the confined server's handle-relative writes. All reads and metadata
+ // requests use the same no-follow path walk, including the leaf. An internal
+ // symlink could otherwise expose a protected path under another name.
+@@ -118,7 +90,7 @@
+ 
+ func (h *cloudHandlers) accessible(p string) (string, error) {
+ 	rel, err := h.rel(p)
+-	if err != nil || !writableName(rel) || CloudPathHidden(rel) {
++	if err != nil || !writableName(rel) {
+ 		return "", errDenied
+ 	}
+ 	return rel, nil
+--- a/pkg/reversesshfs/cloud_test.go
++++ b/pkg/reversesshfs/cloud_test.go
+@@ -90,6 +90,63 @@
+ 	}
+ }
+ 
++func TestCloudGitMetadataFollowsGrantPermissions(t *testing.T) {
++	for _, readonly := range []bool{true, false} {
++		t.Run(map[bool]string{true: "read-only", false: "read-write"}[readonly], func(t *testing.T) {
++			root := t.TempDir()
++			if err := os.MkdirAll(filepath.Join(root, ".git", "refs", "heads"), 0700); err != nil {
++				t.Fatal(err)
++			}
++			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0600); err != nil {
++				t.Fatal(err)
++			}
++			for _, dir := range []string{".vscode", ".claude", ".codex"} {
++				if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
++					t.Fatal(err)
++				}
++			}
++			_, c := cloudClient(t, root, readonly)
++			files, err := c.ReadDir("/")
++			if err != nil || !slices.ContainsFunc(files, func(f os.FileInfo) bool { return f.Name() == ".git" }) {
++				t.Fatalf("Git directory hidden: %v", err)
++			}
++			f, err := c.Open("/.git/HEAD")
++			if err != nil {
++				t.Fatal(err)
++			}
++			data, err := io.ReadAll(f)
++			f.Close()
++			if err != nil || string(data) != "ref: refs/heads/main\n" {
++				t.Fatalf("Git HEAD unreadable: %q %v", data, err)
++			}
++			for _, name := range []string{".git/index", ".git/refs/heads/main", ".git/config", ".gitmodules", ".gitconfig", ".lfsconfig", ".pre-commit-config.yaml", ".git-credentials", ".env", ".npmrc", "private.key", ".vscode/settings.json", ".claude/settings.json", ".codex/config.toml"} {
++				f, err = c.Create("/" + name + ".lock")
++				if readonly {
++					if err == nil {
++						f.Close()
++						t.Fatal("Git write allowed by read-only grant")
++					}
++					continue
++				}
++				if err != nil {
++					t.Fatal(err)
++				}
++				_, err = f.Write([]byte("git-write"))
++				f.Close()
++				if err != nil {
++					t.Fatal(err)
++				}
++				if err = c.PosixRename("/"+name+".lock", "/"+name); err != nil {
++					t.Fatal(err)
++				}
++				if err = c.Remove("/" + name); err != nil {
++					t.Fatal(err)
++				}
++			}
++		})
++	}
++}
++
+ func TestCloudHostileClient(t *testing.T) {
+ 	tmp := t.TempDir()
+ 	root := filepath.Join(tmp, "project")
+@@ -115,12 +172,12 @@
+ 		}
+ 	}
+ 	_, c := cloudClient(t, root, false)
+-	for _, p := range []string{"../outside", "/alias", "/symlink", "/inner/config", "/.Git/config", "/.eNv.production", "/id_ed25519", "/file.key"} {
++	for _, p := range []string{"../outside", "/alias", "/symlink", "/inner/config"} {
+ 		if _, err := c.Open(p); err == nil {
+ 			t.Fatalf("opened %s", p)
+ 		}
+ 	}
+-	for _, p := range []string{"/alias", "/.Git/config", "/.eNv.production", "/id_ed25519", "/file.key"} {
++	for _, p := range []string{"/alias"} {
+ 		if _, err := c.Create(p); err == nil {
+ 			t.Fatalf("created/truncated %s", p)
+ 		}
+@@ -134,15 +191,15 @@
+ 	if err := c.Symlink("../outside", "/link"); err == nil {
+ 		t.Fatal("symlink created")
+ 	}
+-	if err := c.PosixRename("/alias", "/.env"); err == nil {
+-		t.Fatal("replaced secret")
++	if err := c.PosixRename("/alias", "/.env"); err != nil {
++		t.Fatal("project entry rename was blocked by its filename", err)
+ 	}
+ 	files, err := c.ReadDir("/")
+ 	if err != nil {
+ 		t.Fatal(err)
+ 	}
+-	if slices.ContainsFunc(files, func(fi os.FileInfo) bool { return CloudPathHidden(fi.Name()) }) {
+-		t.Fatal("listed protected file")
++	if !slices.ContainsFunc(files, func(fi os.FileInfo) bool { return fi.Name() == ".eNv.production" }) {
++		t.Fatal("project dotfile was hidden")
+ 	}
+ 	content, err := os.ReadFile(out)
+ 	if err != nil || string(content) != "private" {
+--- a/pkg/reversesshfs/cloud_windows.go
++++ b/pkg/reversesshfs/cloud_windows.go
+@@ -26,7 +26,7 @@
+ 		return rootedSys{}, err
+ 	}
+ 	name, err := normalizedName(h)
+-	if err != nil || CloudPathHidden(filepath.ToSlash(name)) {
++	if err != nil {
+ 		windows.CloseHandle(h)
+ 		return rootedSys{}, errDenied
+ 	}
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -115,7 +115,7 @@
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	if h.isReadonlyName(r) || !writableName(r) || (h.cloud && (r == "." || CloudPathHidden(r))) {
++	if h.isReadonlyName(r) || !writableName(r) || (h.cloud && r == ".") {
+ 		return "", errDenied
+ 	}
+ 	if lexicalGuard {
+@@ -433,11 +433,6 @@
+ 	}
+ 	for len(d.buf) < len(ls) && !d.eof {
+ 		fis, err := d.f.Readdir(len(ls) - len(d.buf))
+-		if d.cloud {
+-			fis = slices.DeleteFunc(fis, func(info os.FileInfo) bool {
+-				return CloudPathHidden(info.Name()) || !(info.IsDir() || info.Mode().IsRegular())
+-			})
+-		}
+ 		d.buf = append(d.buf, fis...)
+ 		if errors.Is(err, io.EOF) {
+ 			d.eof = true
+--- a/pkg/reversesshfs/rooted_windows.go
++++ b/pkg/reversesshfs/rooted_windows.go
+@@ -192,9 +192,6 @@
+ 	rel, err := h.normalizedRel(fh)
+ 	if err != nil {
+ 		return err
+-	}
+-	if h.cloud && CloudPathHidden(rel) {
+-		return errDenied
+ 	}
+ 	if rel == "." {
+ 		return nil

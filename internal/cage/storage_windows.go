@@ -97,6 +97,12 @@ func linkStorage(link, target string) (err error) {
 }
 
 func sparseStorageFile(f *os.File) error {
+	// Hyper-V virtual disks manage their own allocation. Adding an NTFS sparse
+	// attribute changes which Virtual Disk API open flags can mount the copy.
+	switch strings.ToLower(filepath.Ext(f.Name())) {
+	case ".vhd", ".vhdx", ".avhd", ".avhdx":
+		return nil
+	}
 	var n uint32
 	return windows.DeviceIoControl(windows.Handle(f.Fd()), windows.FSCTL_SET_SPARSE, nil, 0, nil, 0, &n, nil)
 }

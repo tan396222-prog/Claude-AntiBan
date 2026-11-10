@@ -28,6 +28,7 @@ import (
 	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/diagnostics"
 	"github.com/sylvinus/agent-vm/internal/guard"
+	"github.com/sylvinus/agent-vm/internal/guestos"
 	"github.com/sylvinus/agent-vm/internal/netguard"
 	"github.com/sylvinus/agent-vm/internal/state"
 	"github.com/sylvinus/agent-vm/internal/vmname"
@@ -116,6 +117,15 @@ func Run(args []string) bool {
 			if stopGateControl, err = cage.StartGateControl(path, filepath.Join(string(st), "lima", name), gate); err != nil {
 				logrus.Fatal(err)
 			}
+			if name == "mac" {
+				// The installed Mac profile binds this exact VZ instance. Other
+				// workloads retain their existing switch behavior.
+				if binding, err := guestos.LoadMacOSProfile(filepath.Dir(path)); err != nil {
+					logrus.Fatal(err)
+				} else if binding != nil && binding.Instance == name {
+					usernet.DroppedIPv6 = gate.ObserveDroppedIPv6
+				}
+			}
 			usernet.Outbound, usernet.GuestDial = gate.Allows, gate.DialContext
 			usernet.DNSExchange, dns.Exchange = gate.ExchangeDNS, gate.ExchangeDNS
 		}
@@ -125,11 +135,16 @@ func Run(args []string) bool {
 	}
 	// The user is asked before the VM changes a file their machine runs on
 	// its own (guard): the shares' SFTP server runs here.
-	g, err := guard.Load(string(st), args[len(args)-1])
-	if err != nil {
-		logrus.Fatal(err)
+	if os.Getenv(cage.ConfigEnv) == "" {
+		g, err := guard.Load(string(st), args[len(args)-1])
+		if err != nil {
+			logrus.Fatal(err)
+		}
+		reversesshfs.Guard = g.Allow
+	} else {
+		// Cage grants normal file access inside explicitly shared directories.
+		reversesshfs.Guard = nil
 	}
-	reversesshfs.Guard = g.Allow
 	root := &cobra.Command{
 		Use:           "agent-vm",
 		SilenceUsage:  true,

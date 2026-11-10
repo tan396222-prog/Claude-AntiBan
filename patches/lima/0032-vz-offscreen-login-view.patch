@@ -1,0 +1,31 @@
+--- a/pkg/driver/vz/vz_driver_darwin.go
++++ b/pkg/driver/vz/vz_driver_darwin.go
+@@ -536,8 +536,15 @@
+ 	return errCh, nil
+ }
+ 
++// OffscreenView lets an embedding application service a user-authorized login
++// view without opening Lima's VM window. The application must bind the exact instance.
++var OffscreenView func(ctx context.Context, machine *vz.VirtualMachine, instanceDir string) error
++var OwnsOffscreenView func(instanceDir string) bool
++
+ func (l *LimaVzDriver) canRunGUI() bool {
+ 	switch *l.Instance.Config.Video.Display {
++	case "offscreen":
++		return *l.Instance.Config.OS == limatype.DARWIN && OffscreenView != nil && OwnsOffscreenView != nil && OwnsOffscreenView(l.Instance.Dir)
+ 	case "vz", "default":
+ 		return true
+ 	default:
+@@ -545,8 +552,11 @@
+ 	}
+ }
+ 
+-func (l *LimaVzDriver) RunGUI(_ context.Context) error {
++func (l *LimaVzDriver) RunGUI(ctx context.Context) error {
+ 	if l.canRunGUI() {
++		if *l.Instance.Config.Video.Display == "offscreen" {
++			return OffscreenView(ctx, l.machine.VirtualMachine, l.Instance.Dir)
++		}
+ 		title := fmt.Sprintf("Lima: %s", l.Instance.Name)
+ 		return l.machine.StartGraphicApplication(1920, 1200, vz.WithWindowTitle(title))
+ 	}

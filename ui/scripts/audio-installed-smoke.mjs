@@ -27,6 +27,7 @@ await page.addInitScript(() => {
 try {
   await page.goto(entry.url);
   const volume = page.getByRole("slider", { name: "环境音量" });
+  await page.getByRole("button", { name: "打开音量控制" }).click();
   await volume.press("End");
   await page.waitForFunction(() => window.testAudioGain && window.testAudioContext.state === "running");
   await page.evaluate(() => {

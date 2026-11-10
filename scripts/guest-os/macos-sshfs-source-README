@@ -1,0 +1,61 @@
+Cage macOS guest: SSHFS source and relink materials
+
+This distribution contains the complete SSHFS, GLib, GNU gettext and PCRE2
+upstream source archives, the Cage SSHFS patch, installed Homebrew recipes and
+their external patch/resource, and the exact static libraries and headers used
+to link Cage's SSHFS helper. build.json records source URLs, SHA256 digests,
+versions and the build toolchain. manifest.json binds all these files to the
+final signed project/cage-sshfs executable. Receipts retain build identity
+without the developer's personal filesystem paths.
+
+Rebuild or modify SSHFS on an Apple Silicon Mac with Xcode command-line tools:
+
+1. Obtain the external macFUSE 5.5.0 SDK from its official installer. It is not
+   installed by these commands. The pinned image and package hashes are checked
+   by the included extraction script. Set SOURCE to this extracted directory,
+   and WORK to a new, empty absolute directory:
+
+   mkdir -p "$WORK"
+   curl -fL https://github.com/macfuse/macfuse/releases/download/macfuse-5.5.0/macfuse-5.5.0.dmg -o "$WORK/macfuse.dmg"
+   bash "$SOURCE/cage/macos-fuse-media.sh" "$WORK/macfuse.dmg" "$WORK/fuse.pkg"
+   pkgutil --expand-full "$WORK/fuse.pkg" "$WORK/sdk"
+
+2. Relink using the frozen static libraries and headers:
+
+   bash "$SOURCE/rebuild-macos-sshfs.sh" "$SOURCE" "$WORK/sdk/Core.pkg/Payload/usr/local" "$WORK/cage-sshfs"
+   codesign --force --sign - "$WORK/cage-sshfs"
+
+   No Homebrew installation or network access is needed for this compile step.
+   To modify SSHFS, first extract upstream/sshfs.tar.gz, apply
+   cage/sshfs-openwith.patch with patch -p1, edit the files, then pass that source
+   directory as the fourth argument to rebuild-macos-sshfs.sh.
+
+The helper dynamically loads the separately installed macFUSE runtime. macFUSE
+must be available on the machine where it runs. Xcode, the macOS SDK and macFUSE
+are external system/build prerequisites; they are not redistributed here.
+Rebuilding with another compiler or replacing the Developer ID signature will
+change the executable hash. The manifest describes the shipped executable.
+
+To rebuild the static dependencies, the complete upstream archives are in
+upstream/. The exact Homebrew install methods, configure/Meson flags, inline
+source changes, and versions used for the installed bottles are preserved in
+homebrew/{glib,gettext,pcre2}.rb. GLib's separate introspection resource and
+hardcoded-paths patch are also included. With Homebrew and its recipe build
+tools, copy these recipes to a local tap (Formula/ and Patches/ retain their
+relative paths) and run:
+
+   brew install --build-from-source your/local/pcre2
+   brew install --build-from-source your/local/gettext
+   brew install --build-from-source your/local/glib
+
+The formula install methods list their build prerequisites. As with ordinary
+Homebrew builds, these general-purpose tools and the other formula runtime
+dependencies can be installed separately. The source archives and required
+GLib patch/resource are frozen here; configure local source URLs if building
+without network access. Replace dependencies/* with your rebuilt static
+libraries/headers before relinking. The frozen originals are provided so users
+can relink modified SSHFS immediately, without having to reproduce Homebrew's
+bottle build environment.
+
+Copyright and license texts are under licenses/ and within each complete
+upstream archive. See NOTICE for the shipped components and Cage modification.

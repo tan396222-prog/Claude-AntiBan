@@ -1,0 +1,45 @@
+.remote-browser { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.remote-tools, .remote-address, .remote-keyboard { display: flex; align-items: center; }
+.workspace-address-slot { min-width: 0; flex: 1; }
+.workspace-address-slot + .top-actions { flex: none; }
+.remote-domain { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 44px; padding: 0 8px; border: 0; background: transparent; color: var(--muted); font-size: 13px; overflow: hidden; }
+.remote-address, .remote-keyboard input { border-radius: 10px; background: var(--soft); }
+.remote-address { height: 38px; flex: 1; min-width: 0; gap: 8px; padding-left: 11px; }
+.remote-address svg { flex: none; color: var(--muted); }
+.remote-address input, .remote-keyboard input { flex: 1; min-width: 0; font: inherit; font-size: 16px; color: var(--ink); }
+.remote-address input { width: 100%; height: 44px; border: 0; background: transparent; }
+.remote-address button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; background: transparent; }
+.remote-stage { flex: 1; min-height: 0; position: relative; overflow: hidden; background: var(--soft); }
+.remote-screen { display: block; width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-select: none; touch-action: none; }
+.remote-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; padding: 16px; text-align: center; }
+.remote-tools { flex: none; min-height: 48px; gap: 4px; border-top: 1px solid var(--line); padding: 2px 12px max(2px, var(--safe-bottom, env(safe-area-inset-bottom))); }
+.remote-keyboard { flex: none; flex-wrap: wrap; padding: 4px 8px max(4px, var(--safe-bottom, env(safe-area-inset-bottom))); border-top: 1px solid var(--line); }
+.remote-keyboard input { border: 1px solid var(--line); padding: 9px; }
+.remote-keyboard .icon-button { width: 38px; }
+.remote-note { width: 100%; padding: 3px 10px; color: var(--error); font-size: 13px; }
+@media (max-height: 490px) {
+  .remote-tools { padding-block: 0; min-height: 44px; }
+}
+.display-surface { width: 100%; height: 100%; }
+.display-surface.reading { width: 155%; height: 155%; cursor: grab; }
+.display-surface.reading:active { cursor: grabbing; }
+.remote-tools > button:last-child { margin-left: auto; }
+.phone-favorites { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; padding: 12px 18px 18px; background: var(--paper); }
+.bookmark-heading, .bookmark-save-actions, .bookmark-folder-trigger, .phone-bookmarks li, .bookmark-open { display: flex; align-items: center; }
+.bookmark-heading { gap: 6px; margin: 0 -8px 6px; }
+.bookmark-heading h2 { flex: 1; }
+.bookmark-current { padding: 4px 0 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.bookmark-current .inline-select-trigger { border-radius: 8px; background: var(--soft); padding: 0 12px; color: var(--ink); }
+.bookmark-save-actions { justify-content: flex-end; gap: 5px; margin-top: 6px; }
+.bookmark-folder-trigger, .bookmark-open { width: 100%; min-height: 46px; gap: 8px; padding: 5px 3px; border: 0; background: transparent; text-align: left; }
+.bookmark-folder-trigger span, .bookmark-open strong, .bookmark-open small { white-space: nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bookmark-folder-trigger svg, .bookmark-open svg { flex:none; color:var(--muted); }
+.phone-bookmarks { padding: 0; margin: 0; list-style: none; }
+.bookmark-folder .phone-bookmarks, .bookmark-folder .tree-empty { margin-left: 13px; padding-left: 12px; border-left: 1px solid var(--line); }
+.bookmark-open { min-width:0; flex:1; }
+.bookmark-open span { min-width: 0; display: grid; gap: 3px; }
+.bookmark-open strong { font-size: 15px; font-weight: 550; }
+.bookmark-open small { color: var(--muted); font-size: 12px; }
+.phone-bookmarks .icon-button { color:var(--muted); }
+
+.remote-home-note { flex: none; padding: 7px 12px; background: var(--soft); color: var(--muted); font-size: 13px; line-height: 1.4; overflow-wrap: anywhere; }

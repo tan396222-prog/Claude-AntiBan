@@ -1,0 +1,13 @@
+.macos-approval-frame {
+  display: block;
+  max-width: 100%;
+  max-height: 60vh;
+  width: auto;
+  height: auto;
+  margin: 0 auto;
+  cursor: pointer;
+}
+.macos-approval-path {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}

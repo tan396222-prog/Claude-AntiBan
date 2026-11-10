@@ -19,13 +19,26 @@ export function orderedTabs(tabs, saved) {
   });
 }
 
-export const projectName = (path, defaultWorkspace) =>
-  path === defaultWorkspace && path?.endsWith("-workspace")
-    ? "默认工作区"
-    : path?.split(/[\\/]/).filter(Boolean).at(-1) || "新项目";
+const clientMount = /^\/run\/cage-client-projects\/[0-9a-f]{32}$/;
+const folderName = (path) => path?.split(/[\\/]/).filter(Boolean).at(-1);
+
+export function rememberClientProjectName(share) {
+  if (!clientMount.test(share.guest_path)) return;
+  try { sessionStorage.setItem(share.guest_path, folderName(share.path)); }
+  catch { /* The mount is usable without browser storage. */ }
+}
+
+export function projectName(path, defaultWorkspace) {
+  if (clientMount.test(path)) {
+    try { return sessionStorage.getItem(path) || "本机共享项目"; }
+    catch { return "本机共享项目"; }
+  }
+  if (path === defaultWorkspace && path?.endsWith("-workspace")) return "默认工作区";
+  return folderName(path) || "新项目";
+}
 
 export function tabName(tab, saved, project) {
-  return (
+  return (tab.incognito ? "无痕 · " : "") + (
     saved[tab.id]?.title ||
     (tab.kind === "editor"
       ? `文件 · ${tab.workspace ? projectName(tab.workspace) : project}`

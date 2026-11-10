@@ -56,3 +56,12 @@ func fchmodatOPath(dirfd int, base string, mode uint32) error {
 	}
 	return unix.Chmod("/proc/self/fd/"+strconv.Itoa(fd), mode)
 }
+
+// NO_XDEV also catches a bind mount pointing outside the authorized directory
+// on the same filesystem. Kernels without openat2 fail closed.
+func cloudOpenat(fd int, name string, flags int, mode uint32) (int, error) {
+	if flags&unix.O_CREAT == 0 {
+		mode = 0
+	}
+	return unix.Openat2(fd, name, &unix.OpenHow{Flags: uint64(flags), Mode: uint64(mode), Resolve: unix.RESOLVE_NO_XDEV | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_BENEATH})
+}

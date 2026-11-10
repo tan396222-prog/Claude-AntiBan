@@ -11,7 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { cleanupApps } from "./cleanup-apps.mjs";
 
 const cageID = "io.github.lee-xeo.claude-cage";
@@ -21,9 +21,7 @@ test("cleanup preserves a Cage executable still in use", { skip: process.platfor
   try {
     const latest = await app(path.join(directory, "new.app"));
     const running = await app(path.join(directory, "running.app"));
-    await mkdir(path.join(running, "Contents/MacOS"));
     const executable = path.join(running, "Contents/MacOS/Cage");
-    await copyFile("/bin/sleep", executable);
     child = spawn(executable, ["30"], { stdio: "ignore" });
     await new Promise((resolve, reject) => { child.once("spawn", resolve); child.once("error", reject); });
     const skipped = [];
@@ -39,13 +37,29 @@ test("cleanup preserves a Cage executable still in use", { skip: process.platfor
   }
 });
 async function app(directory, id = cageID) {
-  await mkdir(path.join(directory, "Contents"), { recursive: true });
+  await mkdir(path.join(directory, "Contents/MacOS"), { recursive: true });
   await writeFile(
     path.join(directory, "Contents/Info.plist"),
-    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string></dict></plist>`,
+    `<?xml version="1.0"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${id}</string><key>CFBundleExecutable</key><string>Cage</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>`,
   );
+  await copyFile('/bin/sleep', path.join(directory, 'Contents/MacOS/Cage'));
+  execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', directory], { stdio: 'ignore' });
   return directory;
 }
+
+test('cleanup retains project files added to a previously signed app', { skip: process.platform !== 'darwin' }, async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'cage-cleanup-modified-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const latest = await app(path.join(directory, 'new.app'));
+  const modified = await app(path.join(directory, 'old.app'));
+  const project = path.join(modified, 'Contents/my-project');
+  await mkdir(project);
+  await writeFile(path.join(project, 'work.txt'), 'user work');
+  const retained = [];
+  assert.deepEqual(await cleanupApps({ keep: [latest], roots: [directory], onModified: value => retained.push(value) }), []);
+  assert.deepEqual(retained, [modified]);
+  await access(path.join(project, 'work.txt'));
+});
 
 test(
   "cleanup removes old Cage copies while retaining replacement, foreign apps and linked directories",

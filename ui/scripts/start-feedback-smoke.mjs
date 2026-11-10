@@ -44,12 +44,12 @@ try {
   state.status.job = { ...state.status.job, running: false, error: "测试启动失败" };
   await page.getByRole("button", { name: "启动 Cage 环境", exact: true }).waitFor();
 
-  await page.route("**/api/start", route => route.fulfill({ status: 503, body: "测试请求失败" }));
+  await page.route("**/api/start", route => route.fulfill({ status: 503, contentType: "text/plain; charset=utf-8", body: "测试请求失败" }));
   await page.getByRole("button", { name: "启动 Cage 环境", exact: true }).click();
   await page.getByText("测试请求失败", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "启动 Cage 环境", exact: true }).isEnabled(), true);
 
-  await page.route("**/api/host/git", route => route.fulfill({ status: 503, body: "测试检查失败" }));
+  await page.route("**/api/host/git", route => route.fulfill({ status: 503, contentType: "text/plain; charset=utf-8", body: "测试检查失败" }));
   await page.getByRole("button", { name: "启动 Cage 环境", exact: true }).click();
   await page.getByRole("alert").filter({ hasText: "测试检查失败" }).waitFor();
   await page.getByRole("button", { name: "暂不启动", exact: true }).click();

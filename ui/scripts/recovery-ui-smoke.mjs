@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { smokeCaptureDirectory } from "./smoke-captures.mjs";
 import { createWorkbench } from "./workbench-fixture.mjs";
 
-const output = new URL("../../docs/test-reports/2026-11-01-system-remediation/", import.meta.url);
-await fs.mkdir(output, { recursive: true });
+const output = await smokeCaptureDirectory("recovery-ui");
 const calls = [];
 let update = { phase: "available", currentVersion: "0.2.0-alpha.1", latestVersion: "0.2.0-alpha.2", message: "发现新版本，可下载更新", retryable: true };
 const fixture = await createWorkbench({ nativeRequest: async (body) => {
@@ -23,7 +23,7 @@ try {
   assert.match(await button.getAttribute("title"), /点击后将自动停止环境、安装并重启/);
   const bounds = await button.boundingBox();
   assert.ok(bounds.x < 248 && bounds.y > 700, "update action is not in the bottom-left sidebar");
-  await page.screenshot({ path: fileURLToPath(new URL("update-available.png", output)) });
+  await page.screenshot({ path: join(output, "update-available.png") });
   await button.click();
   assert.equal(calls.filter((call) => call.operation === "install").length, 1);
   await page.getByRole("progressbar", { name: "更新下载进度" }).waitFor();
@@ -55,16 +55,17 @@ try {
   await page.route("**/api/environment/update", (route) => { componentUpdates++; return route.fulfill({ json: { id: "qa-components" } }); });
   await page.getByRole("button", { name: "启动 Cage 环境", exact: true }).click();
   await page.getByRole("heading", { name: "Cage 环境已就绪", exact: true }).waitFor();
-  await page.getByText("“report.txt”未能保存：目标目录暂时无法写入", { exact: true }).waitFor();
   await page.getByRole("button", { name: "打开浏览器", exact: true }).click();
   await page.getByRole("button", { name: "浏览器下载", exact: true }).click();
+  await page.getByRole("dialog", { name: "下载文件" }).getByText("目标目录暂时无法写入", { exact: true }).waitFor();
   await page.getByRole("button", { name: "重试保存", exact: true }).click();
   await page.getByText("已保存到本机", { exact: true }).waitFor();
   assert.equal(retries, 1);
-  await page.screenshot({ path: fileURLToPath(new URL("download-recovery.png", output)) });
+  await page.screenshot({ path: join(output, "download-recovery.png") });
   await page.getByRole("dialog", { name: "下载文件" }).getByRole("button", { name: "关闭面板" }).click();
   await page.getByRole("button", { name: "打开 默认工作区 的编辑器", exact: true }).click();
-  await page.getByRole("button", { name: "恢复编辑器", exact: true }).click();
+  await page.getByRole("button", { name: "浏览器菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: "恢复编辑器", exact: true }).click();
   await page.getByRole("dialog", { name: "重启编辑器？" }).getByRole("button", { name: "重启编辑器", exact: true }).click();
   await page.getByText("编辑器已恢复", { exact: true }).waitFor();
   assert.equal(editorRestarts, 1);
@@ -75,7 +76,7 @@ try {
   await page.getByRole("region", { name: "环境版本" }).getByText("需要更新", { exact: true }).waitFor();
   assert.equal(await page.getByRole("button", { name: "更新环境工具", exact: true }).isDisabled(), true);
   await page.getByRole("button", { name: "更新环境工具", exact: true }).scrollIntoViewIfNeeded();
-  await page.screenshot({ path: fileURLToPath(new URL("environment-versions.png", output)) });
+  await page.screenshot({ path: join(output, "environment-versions.png") });
   await page.getByRole("button", { name: "更新环境组件", exact: true }).click();
   await page.getByRole("dialog", { name: "更新环境组件？" }).getByRole("button", { name: "更新组件", exact: true }).click();
   await page.waitForTimeout(50);
@@ -96,5 +97,5 @@ try {
   assert.equal(prematureReady, false, "failed API initialization acknowledged update success");
   checks.push("startup failure never acknowledges upgrade");
 } finally { await broken.browser.close(); }
-await fs.writeFile(new URL("ui-checks.json", output), JSON.stringify({ checks }, null, 2));
+await fs.writeFile(join(output, "ui-checks.json"), JSON.stringify({ checks }, null, 2));
 console.log(JSON.stringify({ checks }));

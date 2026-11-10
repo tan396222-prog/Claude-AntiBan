@@ -1,3 +1,7 @@
+export function isSafetyCheckMessage(message) {
+  return typeof message === "string" && /关键(?:检查|检测)(?:尚未|未|失败|证据不完整)|完成关键检查|外网(?:未放行|保持关闭)|浏览器配置检查未通过/.test(message);
+}
+
 export function networkState(status, now = Date.now()) {
   if (!status?.vm_running) return { mode: "stopped", label: "环境已停止" };
   const gate = status.safety?.gate;

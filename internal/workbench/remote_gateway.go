@@ -17,12 +17,13 @@ import (
 const connectionHeader = "X-Cage-Connection"
 
 type remoteGateway struct {
-	mu         sync.Mutex
-	remote     bool
-	clientOnly bool
-	store      *remotehost.Store
-	manager    *remotehost.Manager
-	desktop    *desktopGateway
+	mu           sync.Mutex
+	remote       bool
+	clientOnly   bool
+	clientShares map[string]*clientProjectGrant
+	store        *remotehost.Store
+	manager      *remotehost.Manager
+	desktop      *desktopGateway
 }
 
 func newRemoteGateway(profile string) *remoteGateway {
@@ -35,6 +36,7 @@ func (g *remoteGateway) close() {
 		g.desktop.close()
 	}
 	_ = g.manager.Close()
+	g.drainClosedClientShares()
 }
 
 func (g *remoteGateway) isRemote() bool {
@@ -98,6 +100,17 @@ func (s *Server) clientRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := strings.TrimPrefix(r.URL.Path, "/api/client/")
+	if path == "browser-extensions" && (r.Method == http.MethodGet || r.Method == http.MethodPost) {
+		s.localBrowserExtensions(w, r)
+		return
+	}
+	if path == "project-shares" || strings.HasPrefix(path, "project-shares/") {
+		s.clientProjectShareRequest(w, r, path)
+		return
+	}
+	if path == "commit" || path == "disconnect" || path == "local" {
+		defer g.drainClosedClientShares()
+	}
 	if g.desktop != nil && g.desktop.handle(path, w, r) {
 		return
 	}
@@ -254,7 +267,11 @@ func (s *Server) routeRemote(w http.ResponseWriter, r *http.Request) bool {
 	} else {
 		session, err = s.remote.manager.Acquire(requestConnection(r))
 	}
-	if remote && r.URL.Path == "/api/environment/storage" {
+	if remote && r.URL.Path == "/api/projects/client-share" {
+		http.NotFound(w, r)
+		return true
+	}
+	if remote && (r.URL.Path == "/api/environment/storage" || r.URL.Path == "/api/environment/storage/recover") {
 		http.Error(w, "请在虚拟机所在电脑上调整环境存储", http.StatusForbidden)
 		return true
 	}
@@ -262,7 +279,21 @@ func (s *Server) routeRemote(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "连接不可用或已切换，请重新选择工作环境", 409)
 		return true
 	}
-
+	if r.URL.Path == "/api/diagnostics/export" {
+		if !s.diagnosticMu.TryLock() {
+			http.Error(w, "正在导出另一份诊断包，请稍候", http.StatusConflict)
+			return true
+		}
+		defer s.diagnosticMu.Unlock()
+	}
+	if remote && strings.HasPrefix(r.URL.Path, "/api/mobile/") {
+		http.Error(w, "手机只连接当前电脑的 Cage 环境", http.StatusForbidden)
+		return true
+	}
+	if remote && (r.URL.Path == "/api/mobile-pair" || strings.HasPrefix(r.URL.Path, "/api/mobile-pair/")) {
+		http.Error(w, "请切换到这台电脑的本机环境，再管理手机配对", http.StatusForbidden)
+		return true
+	}
 	if remote && r.Method == "GET" && r.URL.Path == "/api/browser/files/saved" {
 		profile, err := clientDownloadProfile(s.profile, ClientContext{Mode: "remote", InstanceID: session.Ref.InstanceID})
 		if err != nil {
@@ -296,6 +327,9 @@ func (s *Server) routeRemote(w http.ResponseWriter, r *http.Request) bool {
 			response.Header.Del("Content-Security-Policy")
 			response.Header.Del("Access-Control-Allow-Origin")
 			response.Header.Set("X-Content-Type-Options", "nosniff")
+			if response.StatusCode == http.StatusOK && response.Request.URL.Path == "/api/diagnostics/export" && strings.HasPrefix(response.Header.Get("Content-Type"), "application/zip") {
+				return s.addDesktopDiagnosticResponse(response)
+			}
 			if response.StatusCode >= 300 && response.StatusCode < 400 {
 				return errors.New("remote redirects are refused")
 			}

@@ -54,6 +54,9 @@ const gatewayMacAddr = "5a:94:ef:e4:0c:dd"
 // The host services the guest needs (AllowHostService) are reached past it.
 var Outbound types.Outbound
 
+// DroppedIPv6 is an optional observer for the instance-owned IPv4-only guest link.
+var DroppedIPv6 func([]byte)
+
 // GuestDial and DNSExchange are host-owned transport hooks.
 var GuestDial types.DialContext
 var DNSExchange func(context.Context, *dns.Msg) (*dns.Msg, error)
@@ -142,6 +145,7 @@ func StartGVisorNetstack(ctx context.Context, gVisorOpts *GVisorNetstackOpts) er
 		},
 		GatewayVirtualIPs: []string{gatewayIP},
 		Outbound:          outbound,
+		DroppedIPv6:       DroppedIPv6,
 		DialContext:       dialGuest,
 		DNSExchange:       DNSExchange,
 		DNSNames:          Names,

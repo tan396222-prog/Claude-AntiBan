@@ -82,7 +82,7 @@ cage_download_tool() (
   for ((attempt=1; attempt<=attempts; attempt++)); do
     url="$upstream"
     part="$artifact.part"
-    if [ "$attempt" = 1 ] && [ -n "$mirror" ] && [ ! -s "$part" ]; then
+    if [ "$attempt" = 2 ] && [ -n "$mirror" ] && [ ! -s "$part" ]; then
       url="$mirror"
       part="$artifact.mirror.part"
     fi
@@ -116,6 +116,10 @@ cage_download_tool() (
       else
         echo 'Mirror download interrupted; trying the official source.' >&2
       fi
+      continue
+    fi
+    if [ "$attempt" = 1 ] && [ -n "$mirror" ] && [ ! -s "$part" ]; then
+      echo 'Official download unavailable; trying the fallback mirror.' >&2
       continue
     fi
     case "$status" in
@@ -163,7 +167,9 @@ cage_install_mise() (
     npm_arch=arm64
     npm_sum="$CAGE_MISE_NPM_ARM64_SHA256"
   fi
-  if [ ! -f "$archive" ] && [ ! -s "$archive.part" ]; then
+  # The GitHub release is preferred. The independently pinned npm archive is
+  # a fallback, including when the official connection cannot make progress.
+  if ! cage_download_tool "$release_url" "$release_sum" "$archive" sha256sum '' 1; then
     npm_url="https://cdn.npmmirror.com/packages/%40jdxcode/mise-linux-$npm_arch/$wanted/mise-linux-$npm_arch-$wanted.tgz"
     npm_archive="$cache/$npm_sum/mise.tar.gz"
     mkdir -p "${npm_archive%/*}"
@@ -171,10 +177,10 @@ cage_install_mise() (
       archive="$npm_archive"
       member=package/bin/mise
     else
-      echo 'mise mirror unavailable or failed verification; trying the official release.' >&2
+      echo 'mise mirror unavailable or failed verification; retrying the official release.' >&2
     fi
   fi
-  if [ "$member" = mise/bin/mise ]; then
+  if [ "$member" = mise/bin/mise ] && [ ! -f "$archive" ]; then
     cage_download_tool "$release_url" "$release_sum" "$archive" || return $?
   fi
   if [ "${CAGE_SETUP_PROGRESS:-}" = 1 ]; then echo 'Installing mise...'; fi

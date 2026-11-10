@@ -3,8 +3,9 @@ import { runtimeSocketURL } from "./client-context.mjs";
 import workletURL from "./audio-worklet.js?url&no-inline";
 
 export class AudioOutput {
-  constructor(onState) {
+  constructor(onState, onError = () => {}) {
     this.onState = onState;
+    this.onError = onError;
     this.active = false;
     this.volume = 1;
     this.generation = 0;
@@ -17,6 +18,7 @@ export class AudioOutput {
       this.disconnect();
       this.context?.suspend().catch(() => {});
       this.onState("idle");
+      this.onError("");
     }
   }
   setVolume(value) {
@@ -84,6 +86,7 @@ export class AudioOutput {
       const format = await api("/audio");
       if (!live()) return;
       if (format.format !== "s16le" || format.sample_rate !== 48000 || format.channels !== 2) throw new Error("声音格式不兼容");
+      this.onError("");
       const socket = new WebSocket(runtimeSocketURL("/audio"));
       socket.binaryType = "arraybuffer";
       this.socket = socket;
@@ -104,7 +107,10 @@ export class AudioOutput {
       socket.onclose = reconnect;
       socket.onerror = () => socket.close();
       this.opening = false;
-    } catch { reconnect(); }
+    } catch (error) {
+      if (live()) this.onError(error.message || "声音连接未能建立，请重试");
+      reconnect();
+    }
   }
   close() {
     this.disposed = true;

@@ -5,7 +5,9 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"testing"
 )
 
@@ -200,6 +202,9 @@ func TestStorageAcrossMountedVolume(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(testDir) })
+	if runtime.GOOS == "windows" && strings.EqualFold(filepath.VolumeName(profile), filepath.VolumeName(testDir)) {
+		t.Fatal("CAGE_TEST_STORAGE_VOLUME must be on a different drive from the temporary profile")
+	}
 	data := make([]byte, 2<<20)
 	copy(data[len(data)-32:], []byte("second volume"))
 	rel := filepath.Join("lima", "guest", "disk")

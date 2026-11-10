@@ -36,10 +36,11 @@ func miseArchive(t *testing.T, member, content string) ([]byte, string) {
 
 func TestMiseArchivesHaveIndependentPinsResumeAndFallback(t *testing.T) {
 	for _, tc := range []struct{ arch, mode, sources string }{
-		{"amd64", "fresh", "npm:0"}, {"arm64", "fresh", "npm:0"},
-		{"amd64", "bad-mirror", "npm:0 release:0"},
-		{"arm64", "cached-release", ""}, {"amd64", "partial-release", "release:7"}, {"arm64", "partial-npm", "npm:7"},
-		{"amd64", "both-corrupt", "npm:0 release:0"},
+		{"amd64", "fresh", "release:0"}, {"arm64", "fresh", "release:0"},
+		{"amd64", "official-failure", "release:0 npm:0"},
+		{"amd64", "bad-mirror", "release:0 npm:0 release:0"},
+		{"arm64", "cached-release", ""}, {"amd64", "partial-release", "release:7"}, {"arm64", "partial-npm", "release:0 npm:7"},
+		{"amd64", "both-corrupt", "release:0 npm:0 release:0"},
 	} {
 		t.Run(tc.arch+"/"+tc.mode, func(t *testing.T) {
 			dir := t.TempDir()
@@ -86,6 +87,10 @@ done
 n=0
 if [ -f "$out" ]; then n=$(wc -c <"$out" | tr -d ' '); fi
 printf '%s:%s\n' "$src" "$n" >> "$HOME/sources"
+if [ "$src" = release ]; then
+  case "$TEST_MODE" in official-failure|partial-npm) printf 503; exit 22;; esac
+  if [ "$TEST_MODE" = bad-mirror ] && [ "$(wc -l < "$HOME/sources" | tr -d ' ')" = 1 ]; then printf 503; exit 22; fi
+fi
 if [ "$TEST_MODE" = both-corrupt ] || { [ "$src" = npm ] && [ "$TEST_MODE" = bad-mirror ]; }; then
   printf wrong-archive >"$out"
 else

@@ -1,9 +1,0 @@
-Use case: ads-marketing, open-source community anime key visual. Adapt the supplied finished Claude 防封 portrait poster into a beautifully composed landscape 2048x1152 X/Twitter image. Keep the same adult orange-haired anime heroine, amber eyes, orange flower ornaments, dark ribbon, modest cream blouse, bronze cage window, reaching hand and sealed envelope, warm golden evening lighting and cream paper artbook identity. Preserve face identity, nuanced 2D anime rendering and warm wistful expression. Recompose, do not stretch or crop the portrait. Left 47%: quiet cream negative space with generous typography. Right 53%: full-height anime illustration, face large and unobstructed inside bronze window, envelope reaching across lower center. Hair and golden light can softly bridge the two halves. Sophisticated illustrated cover, not sales campaign; no price, no buttons, no disclaimers, no cards, no added characters, no watermark.
-Use ONLY the exact following text, all correctly spelled, readable and inside 72px safe margins:
-Small brand at upper left: "Claude 防封"
-Large headline on left in three lines: "把 Claude" / "大小姐" / "关起来。"
-Subhead below: "一个为 Claude 准备的开源小窝"
-Three compact separate readable lines lower left: "代理隔离" / "环境自动配置" / "多账号调度"
-Footer left: "macOS / Windows / Linux"
-Repository along bottom left: "github.com/tan396222-prog/Claude-AntiBan"
-Keep text on calm light background, no text on heroine or envelope. Footer comfortably above lower edge. Retain original's artbook-like burnt-orange and charcoal typography, refined spacing and low commercial intensity.

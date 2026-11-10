@@ -3,12 +3,14 @@ import { createHash } from "node:crypto";
 
 // A bounded RFB display over real browser WebSockets. Playwright's WebSocket
 // replacement lacks the prototype properties checked by the shipped noVNC.
-export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
-  const stats = { connections: 0, closed: 0, frames: 0 };
+export async function startDisplay(upstream, { frameInterval = 50, sharedClipboard = false } = {}) {
+  const stats = { connections: 0, closed: 0, frames: 0, clipboardConnections: 0, clipboardUpdates: [], keys: [] };
   const sockets = new Set();
   const displays = new Set();
   const clipboardWriters = new Set();
-  let width = 640, height = 480;
+  const sharedWriters = new Set(), sharedSockets = new Set();
+  const terminalWriters = new Set();
+  let width = 640, height = 480, framesPaused = false;
   const server = http.createServer((req, res) => {
     if (req.url.startsWith("/api/")) {
       res.writeHead(503); res.end("Unmocked fixture request"); return;
@@ -21,7 +23,9 @@ export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
     proxy.on("error", () => { res.writeHead(502); res.end(); });
   });
   server.on("upgrade", (req, socket) => {
-    if (!["/api/vnc", "/api/claude-desktop/vnc"].includes(req.url)) { socket.destroy(); return; }
+    const shared = sharedClipboard && new URL(req.url,upstream).pathname === "/api/clipboard";
+    const terminal = sharedClipboard && /^\/api\/terminals\/[^/]+\/stream$/.test(new URL(req.url, upstream).pathname);
+    if (!shared && !terminal && !["/api/vnc", "/api/claude-desktop/vnc"].includes(new URL(req.url, upstream).pathname)) { socket.destroy(); return; }
     sockets.add(socket);
     stats.connections++;
     const key = createHash("sha1").update(req.headers["sec-websocket-key"] + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
@@ -36,6 +40,13 @@ export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
       if (header.length === 10) header.writeBigUInt64BE(BigInt(length), 2);
       socket.write(Buffer.concat([header, payload]));
     };
+    const sharedWrite = value => send(Buffer.from(JSON.stringify(value)),1);
+    const terminalWrite = text => send(Buffer.from(text));
+    if (terminal) terminalWriters.add(terminalWrite);
+    if (shared) {
+      stats.clipboardConnections++; sharedWriters.add(sharedWrite); sharedSockets.add(socket);
+      sharedWrite({ hello: { version: 1, os: "linux", session: "fixture-session", formats: ["text", "png", "files"], available: true } });
+    }
     const clipboard = (text) => {
       const bytes = Buffer.from(text, "latin1"), message = Buffer.alloc(8 + bytes.length);
       message[0] = 3;
@@ -77,7 +88,7 @@ export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
         displays.add(resize);
         clipboardWriters.add(clipboard);
         timer = setInterval(() => {
-          if (socket.writableLength > frame.length * 2) return;
+          if (framesPaused || socket.writableLength > frame.length * 2) return;
           frame.fill(stats.frames % 255, 16);
           send(frame); stats.frames++;
         }, frameInterval);
@@ -97,6 +108,8 @@ export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
         }
         if (!length) { socket.destroy(); return; }
         if (rfb.length < length) return;
+        if (type === 5) stats.pointer = { x: rfb.readUInt16BE(2), y: rfb.readUInt16BE(4) };
+        if (type === 4) stats.keys.push({ down: Boolean(rfb[1]), symbol: rfb.readUInt32BE(4) });
         if (type === 248 && (rfb.readUInt32BE(4) & 0x80000000)) {
           const response = Buffer.from(rfb.subarray(0, length));
           response.writeUInt32BE(rfb.readUInt32BE(4) & 3, 4);
@@ -120,18 +133,27 @@ export async function startDisplay(upstream, { frameInterval = 50 } = {}) {
         wire = wire.subarray(offset + maskBytes + length);
         if (opcode === 8) { send(payload, 8); socket.end(); return; }
         if (opcode === 9) send(payload, 10);
-        if (opcode === 1 || opcode === 2) consume(payload);
+        if (shared && opcode === 1) {
+          const value = JSON.parse(payload.toString());
+          stats.clipboardUpdates.push(value);
+          sharedWrite({ ack: value.serial });
+        } else if (!terminal && (opcode === 1 || opcode === 2)) consume(payload);
       }
     });
     socket.on("error", () => {});
-    socket.on("close", () => { clearInterval(timer); displays.delete(resize); clipboardWriters.delete(clipboard); sockets.delete(socket); stats.closed++; });
-    send(Buffer.from("RFB 003.008\n"));
+    socket.on("close", () => { clearInterval(timer); displays.delete(resize); clipboardWriters.delete(clipboard); sharedWriters.delete(sharedWrite); terminalWriters.delete(terminalWrite); sharedSockets.delete(socket); sockets.delete(socket); stats.closed++; });
+    if (terminal) terminalWrite("Terminal clipboard ready\r\n$ ");
+    else if (!shared) send(Buffer.from("RFB 003.008\n"));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
     url: `http://127.0.0.1:${server.address().port}`,
     stats,
+    pauseFrames(paused) { framesPaused = paused; },
     clipboard(text) { for (const write of clipboardWriters) write(text); },
+    sharedClipboard(value) { for (const write of sharedWriters) write(value); },
+    terminalOutput(text) { for (const write of terminalWriters) write(text); },
+    disconnectClipboard() { for (const socket of sharedSockets) socket.destroy(); },
     resize(size) { width = size.width; height = size.height; for (const resize of displays) resize(); },
     close: async () => {
       for (const socket of sockets) socket.destroy();

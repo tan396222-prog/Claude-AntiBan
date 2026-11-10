@@ -1,12 +1,19 @@
 Claude Cage
 Copyright (c) 2026 Claude Cage contributors (MIT, see LICENSE)
-Based on agent-vm at 652688aae92c35ce536b9be52262e1cc5ec6e03a.
+Based on agent-vm.
 
 The Cage desktop bundle additionally includes React, xterm.js, Lucide,
 noVNC (MPL-2.0, including the modifications in internal/cage/novnc-patch.py),
 and the separately executed Mihomo core (GPL-3.0).
 Their license texts and source notices are distributed in Contents/Resources/licenses.
 Mihomo's corresponding source is distributed alongside the macOS release.
+The macOS guest also includes Cage-modified SSHFS (GNU GPL version 2), with
+statically linked GLib and GNU gettext libintl (LGPL-2.1-or-later), and PCRE2
+(BSD-3-Clause WITH PCRE2-exception, and SLJIT under BSD-2-Clause). Their license
+texts are in Contents/Resources/licenses/sshfs.
+Their complete corresponding source, patches, build recipes and static relink
+materials are in the cage-macos-guest-VERSION-source.tar.gz release asset,
+also retained in Contents/Resources/guest-os/sources inside the macOS App.
 The root MIT license does not replace these third-party license terms.
 
 agent-vm
@@ -21,16 +28,11 @@ projects. Their licenses and notices are in THIRD_PARTY_LICENSES, and
   gvisor-tap-vsock  https://github.com/containers/gvisor-tap-vsock    Apache-2.0
   pkg/sftp          https://github.com/pkg/sftp                       BSD-2-Clause
 
-The third_party/ folder holds each of these as its upstream source at the
-commit recorded in third_party/SOURCES, with the patches in patches/ applied
-and nothing else (scripts/third-party-sync rebuilds it, and CI checks it).
-
-Modifications, as section 4(b) of the Apache License 2.0 requires: the files
-of Lima, sshocker and gvisor-tap-vsock that the patches in patches/lima,
-patches/sshocker and patches/gvisor-tap-vsock change have been modified by
-agent-vm. The patches are the complete statement of the changes; their
-purpose is described in patches/README.md. pkg/sftp is modified the same way
-(patches/sftp), under its BSD-2-Clause license.
+The third_party/ folder contains the dependency source compiled into Cage.
+Files in the bundled Lima, sshocker, gvisor-tap-vsock and pkg/sftp components
+include modifications by agent-vm and Cage contributors. Their original
+license headers and notices are retained. The patch files carry the code
+changes used for the bundled components.
 
 The NOTICE of Lima is reproduced in THIRD_PARTY_LICENSES, as section 4(d) of
 the Apache License 2.0 asks.

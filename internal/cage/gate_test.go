@@ -64,6 +64,7 @@ func TestSafetyReportRequiresCompleteCurrentEvidence(t *testing.T) {
 		"missing evidence":    func(r *SafetyReport) { r.Checks[0].Evidence = "" },
 		"duplicate":           func(r *SafetyReport) { r.Checks = append(r.Checks, r.Checks[0]) },
 		"old VM":              func(r *SafetyReport) { r.RunID = "old-run" },
+		"old country policy":  func(r *SafetyReport) { r.Policy = "cage-safety/2" },
 		"other configuration": func(r *SafetyReport) { r.Configuration = "other" },
 		"expired":             func(r *SafetyReport) { r.CreatedAt = time.Now().Add(-25 * time.Hour) },
 	} {

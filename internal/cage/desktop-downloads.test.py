@@ -67,6 +67,9 @@ class DesktopDownloadsTests(unittest.TestCase):
         self.assertEqual(item['name'], 'video (1).mp4')
         self.assertEqual(Path(item['path']).read_bytes(), b'export')
         self.assertEqual((self.workspace / 'Downloads' / 'video.mp4').read_bytes(), b'original')
+        self.assertEqual(self.manager.host_visible_path(str(target)), item['path'])
+        self.assertEqual(self.manager.host_visible_path(str(target.parent)), str(Path(item['path']).parent))
+        self.assertEqual(self.manager.host_visible_path('/etc/passwd'), '/etc/passwd')
 
     def test_cancel_discards_partial_and_empty_download_completes_by_rename(self):
         target = Path(self.manager.begin('canceled.mp4'))

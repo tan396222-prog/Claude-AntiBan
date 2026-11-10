@@ -5,11 +5,49 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
-import { assertWindowsExecutable, invokeJava, javaArgument, prepareVendorInput, redact, verifyTool } from './esigner.mjs';
+import { assertWindowsExecutable, credentialDiagnostic, invokeJava, invokeSigning, javaArgument, prepareVendorInput, redact, verifyTool } from './esigner.mjs';
 
 test('Java arguments reject line injection and redact overlapping secrets', () => {
   for (const value of ['line\nbreak', 'line\rbreak', 'a\0b']) assert.throws(() => javaArgument(value));
   assert.equal(redact('secret-long and secret', ['secret', 'secret-long']), '[redacted] and [redacted]');
+});
+
+test('read-only credential diagnosis emits only fixed stage, exit and error classifications', () => {
+  assert.deepEqual(credentialDiagnostic(), { operation: 'credential_info', success: true, stage: 'csc-credential-info', exitCode: 0, error: '' });
+  for (const [code, stage] of [[1, 'oauth-token'], [2, 'csc-credential-info'], [3, 'client']]) {
+    const result = credentialDiagnostic(new Error(`CodeSignTool failed (exit ${code}). Error: {"error":"server_error","token":"private-token","username":"private-user","credential_id":"private-id"}`));
+    assert.deepEqual(result, { operation: 'credential_info', success: false, stage, exitCode: code, error: 'server_error' });
+    assert.ok(!JSON.stringify(result).includes('private'));
+  }
+  const unknown = credentialDiagnostic(new Error('private-user private-id private-token {"error":"private_password"}'));
+  assert.equal(unknown.error, 'unclassified');
+  assert.equal(unknown.exitCode, null);
+  assert.ok(!JSON.stringify(unknown).includes('private'));
+});
+
+test('signing retries only declared server errors without output and remains bounded', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'cage-sign-retry-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const outputPath = join(root, 'signed.exe'), delays = [];
+  const failure = () => new Error('CodeSignTool failed (exit 11). Error: {"error":"server_error"}');
+  let count = 0;
+  assert.equal(await invokeSigning({ outputPath, pause: async ms => delays.push(ms), invoke: async () => { if (++count < 3) throw failure(); return 'signed'; } }), 'signed');
+  assert.deepEqual(delays, [15000, 30000]);
+  count = 0;
+  await assert.rejects(invokeSigning({ outputPath, pause: async () => {}, invoke: async () => { count++; throw failure(); } }), /server_error/);
+  assert.equal(count, 3);
+  for (const message of ['OTP rejected', 'authentication failed', 'timeout', 'CodeSignTool failed (exit 1). server_error', `${failure().message}\nOTP rejected`, `${failure().message}\ninvalid otp`, `${failure().message}\ntimeout`]) {
+    count = 0;
+    await assert.rejects(invokeSigning({ outputPath, pause: async () => assert.fail('must not wait'), invoke: async () => { count++; throw new Error(message); } }));
+    assert.equal(count, 1);
+  }
+  count = 0;
+  await assert.rejects(invokeSigning({ outputPath, pause: async () => assert.fail('quota is not transient'), invoke: async () => { count++; throw Object.assign(failure(), { quotaExceeded: true }); } }));
+  assert.equal(count, 1);
+  count = 0;
+  await invokeSigning({ outputPath, pause: async () => assert.fail('output requires trust verification, never another signature'), invoke: async () => { count++; await writeFile(outputPath, 'candidate output'); throw failure(); } });
+  assert.equal(count, 1);
+  assert.equal(await readFile(outputPath, 'utf8'), 'candidate output');
 });
 
 test('a real JVM receives quoted Unicode arguments, no secrets in process arguments, and OTP through stdin', async t => {
@@ -37,6 +75,11 @@ public class Signer {
     String otp = new Scanner(System.in).nextLine();
     if (!otp.equals("123456")) System.exit(16);
     System.out.println(otp);
+    if (Arrays.asList(args).contains("quota")) {
+      Files.writeString(Path.of("logs", "code_signing_tool.log"), "sensitive-user sensitive-id sensitive-token\\n    at com.ssl.code.signing.tool.csc.CscApi.getMalwareScanResponse(CscApi.java:1)\\nQuotaExceededError dummy-password");
+      System.out.println("Error: {\\\"error\\\":\\\"server_error\\\",\\\"token\\\":\\\"sensitive-token\\\"}");
+      System.exit(11);
+    }
     if (Arrays.asList(args).contains("fail")) { System.out.println("Error: dummy-password"); System.exit(4); }
   }
 }
@@ -69,6 +112,21 @@ public class Signer {
       else process.env.CAGE_ESIGNER_PASSWORD = previous;
     }
   }
+  const quotaMarker = join(temp, 'quota-marker');
+  let quotaCalls = 0;
+  await assert.rejects(invokeSigning({ outputPath: join(temp, 'no-signed-output.exe'), pause: async () => assert.fail('quota cannot cause a second signing request'), invoke: () => {
+    quotaCalls++;
+    return invokeJava({ jar, config, arguments: [quotaMarker, 'quota'], otp: async () => '123456', secrets: ['dummy-password'] });
+  } }), error => {
+    assert.equal(error.failureStage, 'malware-scan');
+    assert.equal(error.providerCode, 'server_error');
+    assert.equal(error.quotaExceeded, true);
+    for (const secret of ['sensitive-user', 'sensitive-id', 'sensitive-token', 'dummy-password', '123456']) assert.ok(!`${error.message}${JSON.stringify(error)}`.includes(secret));
+    return true;
+  });
+  assert.equal(quotaCalls, 1);
+  const quotaWorking = await readFile(quotaMarker, 'utf8');
+  await assert.rejects(readFile(join(quotaWorking, 'logs/code_signing_tool.log')), { code: 'ENOENT' });
 });
 
 test('modified vendor binaries are refused before executing Java', async t => {

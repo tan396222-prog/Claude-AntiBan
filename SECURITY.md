@@ -1,6 +1,6 @@
 # 安全问题
 
-Cage 仍处于 Alpha。隔离与网络检查的范围见 [README](README.md) 和[网络检查设计](docs/design/network-checks.md)。
+Cage 仍处于 Alpha。隔离与网络检查的范围见 [README](README.md) 和[网络与数据边界](docs/getting-started.md#网络与数据边界)。
 
 请勿在公开 Issue 中上传代理订阅、节点密码、会话入口、访问令牌、完整配置目录或未脱敏的诊断输出。
 

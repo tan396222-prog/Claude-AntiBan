@@ -262,6 +262,23 @@
   display: block;
   margin-top: 6px;
 }
+.proxy-source-skipped {
+  margin-top: 8px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.proxy-source-skipped summary {
+  cursor: pointer;
+  color: var(--muted);
+}
+.proxy-source-skipped summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.proxy-source-skipped ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
 .proxy-import {
   margin-top: 18px;
   padding: 18px;
@@ -284,6 +301,113 @@
   padding: 10px;
   border-radius: 7px;
   font: 12px/1.6 var(--font-mono, monospace);
+}
+.proxy-yaml-input {
+  margin-top: 4px;
+}
+.proxy-yaml-dropzone {
+  display: flex;
+  width: 100%;
+  gap: 14px;
+  padding: 20px;
+  border: 1px dashed var(--muted);
+  border-radius: 10px;
+  background: var(--chrome);
+  text-align: left;
+  white-space: normal;
+  transition:
+    background 140ms,
+    border-color 140ms;
+}
+.proxy-yaml-dropzone:hover:not(:disabled) {
+  border-color: var(--strong);
+}
+.proxy-yaml-input.is-dragging .proxy-yaml-dropzone {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--selected);
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.proxy-yaml-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  color: var(--muted);
+  background: var(--paper);
+  border-radius: 8px;
+}
+.proxy-yaml-file {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.6;
+}
+.proxy-yaml-file strong {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.proxy-yaml-file > span {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.proxy-yaml-choose {
+  flex: none;
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--paper);
+  font-size: 12px;
+}
+.proxy-yaml-help,
+.proxy-yaml-status,
+.proxy-yaml-error {
+  margin: 8px 0 16px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.proxy-yaml-status {
+  color: var(--ink);
+}
+.proxy-yaml-status:empty {
+  display: none;
+}
+.proxy-yaml-help:has(+ .proxy-yaml-status:not(:empty)) {
+  margin-bottom: 4px;
+}
+.proxy-yaml-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--danger);
+}
+.proxy-yaml-error > svg {
+  flex: none;
+  margin-top: 2px;
+}
+@media (max-width: 600px) {
+  .proxy-yaml-dropzone {
+    flex-wrap: wrap;
+    padding: 16px;
+    gap: 12px;
+  }
+  .proxy-yaml-file {
+    flex-basis: calc(100% - 52px);
+  }
+  .proxy-yaml-choose {
+    margin-left: 52px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .proxy-yaml-dropzone {
+    transition: none;
+  }
 }
 .proxy-form-actions {
   display: flex;

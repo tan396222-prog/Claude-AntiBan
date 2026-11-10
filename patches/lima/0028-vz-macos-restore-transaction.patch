@@ -1,0 +1,228 @@
+--- a/pkg/driver/vz/vz_driver_darwin.go
++++ b/pkg/driver/vz/vz_driver_darwin.go
+@@ -24,6 +24,7 @@
+ 	"github.com/lima-vm/go-qcow2reader/image/asif"
+ 	"github.com/lima-vm/go-qcow2reader/image/raw"
+ 	"github.com/sirupsen/logrus"
++	"golang.org/x/sys/unix"
+ 
+ 	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/driverutil"
+@@ -34,6 +35,7 @@
+ 	"github.com/lima-vm/lima/v2/pkg/limatype"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
+ 	"github.com/lima-vm/lima/v2/pkg/limayaml"
++	"github.com/lima-vm/lima/v2/pkg/lockutil"
+ 	"github.com/lima-vm/lima/v2/pkg/osutil"
+ 	"github.com/lima-vm/lima/v2/pkg/reflectutil"
+ 	"github.com/lima-vm/lima/v2/pkg/sshutil"
+@@ -370,39 +372,62 @@
+ }
+ 
+ func (l *LimaVzDriver) CreateDisk(ctx context.Context) error {
+-	if *l.Instance.Config.OS == limatype.DARWIN {
++	if *l.Instance.Config.OS != limatype.DARWIN {
++		return driverutil.EnsureDisk(ctx, l.Instance.Dir, *l.Instance.Config.Disk, l.diskImageFormat)
++	}
++	return lockutil.WithDirLock(l.Instance.Dir, func() error {
++		if err := ctx.Err(); err != nil {
++			return err
++		}
+ 		disk := filepath.Join(l.Instance.Dir, filenames.Disk)
+-		if !osutil.FileExists(disk) {
+-			if err := l.createDiskMacOSGuest(ctx); err != nil {
+-				return err
+-			}
+-		}
+-
+-		patchedMarker := disk + ".patched" // empty file
+-		if !osutil.FileExists(patchedMarker) {
+-			logrus.Infof("Patching macOS disk %#q", disk)
+-			if err := macos.Patch(ctx, disk); err != nil {
+-				return err
+-			}
+-			if err := os.WriteFile(patchedMarker, []byte{}, 0o644); err != nil {
+-				return err
+-			}
+-		}
+-	}
+-	return driverutil.EnsureDisk(ctx, l.Instance.Dir, *l.Instance.Config.Disk, l.diskImageFormat)
+-}
+-
+-// createDiskMacOSGuest creates `disk` and installs macOS from `image` on it.
+-// The function must not be called if `disk` already exists.
+-//
+-// The function creates the following files:
+-// - `image.ipsw`: hardlink to `image` (".ipsw" suffix is required by VZMacOSInstaller)
+-// - `disk`: raw or ASIF disk (ASIF requires macOS 26+)
+-//
+-// After successful installation, `image.ipsw` and `image` are removed.
+-func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context) error {
+-	disk := filepath.Join(l.Instance.Dir, filenames.Disk)
+-
++		if err := restoreMacOSDisk(disk, func(staging string) error { return l.createDiskMacOSGuest(ctx, staging) }); err != nil {
++			return err
++		}
++		patchedMarker := disk + ".patched"
++		if osutil.FileExists(patchedMarker) {
++			return nil
++		}
++		logrus.Infof("Patching macOS disk %#q", disk)
++		if err := macos.Patch(ctx, disk); err != nil {
++			return fmt.Errorf("preparing existing macOS disk %q: %w", disk, err)
++		}
++		return os.WriteFile(patchedMarker, nil, 0o644)
++	})
++}
++
++// restoreMacOSDisk is called with the instance lock held. Existing guest disks
++// are never replaced. A process that exits during restore leaves only staging.
++func restoreMacOSDisk(disk string, install func(string) error) error {
++	if _, err := os.Lstat(disk); err == nil || !errors.Is(err, os.ErrNotExist) {
++		return err
++	}
++	staging := disk + ".installing"
++	// diskutil can append .asif when creating a blank disk. A killed process
++	// can leave either name behind. A fresh install also needs a fresh patch.
++	for _, path := range []string{staging, staging + ".asif", disk + ".patched"} {
++		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
++			return err
++		}
++	}
++	defer os.Remove(staging)
++	defer os.Remove(staging + ".asif")
++	if err := install(staging); err != nil {
++		return err
++	}
++	if err := unix.RenamexNp(staging, disk, unix.RENAME_EXCL); err != nil {
++		return err
++	}
++	// Remove only the instance's installation media after the disk is ready.
++	for _, filename := range []string{filenames.ImageIPSW, filenames.Image} {
++		path := filepath.Join(filepath.Dir(disk), filename)
++		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
++			logrus.WithError(err).Warnf("Failed to remove %#q", path)
++		}
++	}
++	return nil
++}
++
++func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context, disk string) error {
+ 	diskSize, err := units.RAMInBytes(*l.Instance.Config.Disk)
+ 	if err != nil {
+ 		return fmt.Errorf("invalid disk size %#q: %w", *l.Instance.Config.Disk, err)
+@@ -428,7 +453,7 @@
+ 	}
+ 	ipsw := filepath.Join(l.Instance.Dir, filenames.ImageIPSW)
+ 
+-	vm, err := createVMForMacInstaller(ctx, l.Instance)
++	vm, err := createVMForMacInstaller(ctx, l.Instance, disk)
+ 	if err != nil {
+ 		return err
+ 	}
+@@ -438,16 +463,6 @@
+ 	// or can we safely reuse the installed disk image?
+ 	if err := installMacOS(ctx, vm, ipsw); err != nil {
+ 		return fmt.Errorf("failed to install macOS: %w", err)
+-	}
+-
+-	filesToClean := []string{
+-		ipsw,
+-		filepath.Join(l.Instance.Dir, filenames.Image),
+-	}
+-	for _, file := range filesToClean {
+-		if err := os.RemoveAll(file); err != nil {
+-			logrus.WithError(err).Warnf("Failed to remove %#q", file)
+-		}
+ 	}
+ 
+ 	return nil
+--- a/pkg/driver/vz/vm_darwin.go
++++ b/pkg/driver/vz/vm_darwin.go
+@@ -259,7 +259,7 @@
+ // createVMForMacInstaller is similar to createVM but only used for VZMacOSInstaller.
+ // - Only the primary disk is attached.
+ // - No network.
+-func createVMForMacInstaller(_ context.Context, inst *limatype.Instance) (*vz.VirtualMachine, error) {
++func createVMForMacInstaller(_ context.Context, inst *limatype.Instance, disk string) (*vz.VirtualMachine, error) {
+ 	vmConfig, err := createInitialConfig(inst)
+ 	if err != nil {
+ 		return nil, err
+@@ -270,7 +270,6 @@
+ 	}
+ 
+ 	// Only attach the primary disk here. cidata.iso is not existent at this point.
+-	disk := filepath.Join(inst.Dir, filenames.Disk)
+ 	diffDiskAttachment, err := vz.NewDiskImageStorageDeviceAttachmentWithCacheAndSync(disk, false, diskImageCachingMode, vz.DiskImageSynchronizationModeFsync)
+ 	if err != nil {
+ 		return nil, err
+--- a/pkg/driver/vz/vm_darwin_arm64.go
++++ b/pkg/driver/vz/vm_darwin_arm64.go
+@@ -65,11 +65,24 @@
+ 		if err != nil {
+ 			return nil, err
+ 		}
+-		ipswMostFeatureFul := ipswImage.MostFeaturefulSupportedConfiguration()
+-		hwModelData = ipswMostFeatureFul.HardwareModel().DataRepresentation()
++		if ipswImage == nil {
++			return nil, fmt.Errorf("missing restore image for %q", ipsw)
++		}
++		requirements := ipswImage.MostFeaturefulSupportedConfiguration()
++		if requirements == nil || requirements.MinimumSupportedCPUCount() == 0 {
++			return nil, fmt.Errorf("IPSW %q has no configuration supported by this Mac", ipsw)
++		}
++		model := requirements.HardwareModel()
++		if model == nil || !model.Supported() || len(model.DataRepresentation()) == 0 {
++			return nil, fmt.Errorf("IPSW %q has no supported hardware model", ipsw)
++		}
++		hwModelData = model.DataRepresentation()
+ 		if err = os.WriteFile(hwModelFile, hwModelData, 0o666); err != nil {
+ 			return nil, err
+ 		}
++	}
++	if len(hwModelData) == 0 {
++		return nil, fmt.Errorf("empty macOS hardware model in %q", hwModelFile)
+ 	}
+ 	hwModel, err := vz.NewMacHardwareModelWithData(hwModelData)
+ 	if err != nil {
+--- a/pkg/driver/vz/vz_driver_darwin_test.go
++++ b/pkg/driver/vz/vz_driver_darwin_test.go
+@@ -54,6 +54,38 @@
+ 	})
+ }
+ 
++func TestInterruptedMacOSRestorePreservesMediaAndPublishedDisk(t *testing.T) {
++	dir := t.TempDir()
++	disk := filepath.Join(dir, filenames.Disk)
++	media := filepath.Join(dir, filenames.Image)
++	assert.NilError(t, os.WriteFile(media, []byte("source"), 0o600))
++	failure := errors.New("interrupted")
++	err := restoreMacOSDisk(disk, func(stage string) error {
++		assert.NilError(t, os.WriteFile(stage, []byte("partial"), 0o600))
++		_, statErr := os.Stat(disk)
++		assert.Assert(t, errors.Is(statErr, os.ErrNotExist))
++		return failure
++	})
++	assert.Assert(t, errors.Is(err, failure))
++	_, err = os.Stat(disk)
++	assert.Assert(t, errors.Is(err, os.ErrNotExist))
++	_, err = os.Stat(media)
++	assert.NilError(t, err)
++	// A killed installer cannot execute its deferred cleanup.
++	assert.NilError(t, os.WriteFile(disk+".installing", []byte("partial"), 0o600))
++	assert.NilError(t, restoreMacOSDisk(disk, func(stage string) error {
++		_, err := os.Stat(stage)
++		assert.Assert(t, errors.Is(err, os.ErrNotExist))
++		return os.WriteFile(stage, []byte("ready"), 0o600)
++	}))
++	data, err := os.ReadFile(disk)
++	assert.NilError(t, err)
++	assert.Equal(t, string(data), "ready")
++	_, err = os.Stat(media)
++	assert.Assert(t, errors.Is(err, os.ErrNotExist))
++	assert.NilError(t, restoreMacOSDisk(disk, func(string) error { return errors.New("attempted to reinstall an existing guest disk") }))
++}
++
+ func TestRemovePIDFile(t *testing.T) {
+ 	dir := t.TempDir()
+ 	l := &LimaVzDriver{

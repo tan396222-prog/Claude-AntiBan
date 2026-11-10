@@ -7,7 +7,11 @@ let cageUpdateBundleID = "io.github.lee-xeo.claude-cage"
 
 enum CageProfile {
     static var clientOnly: Bool { Bundle.main.object(forInfoDictionaryKey: "CageClientOnly") as? Bool == true }
+    static var macGuestTrial: Bool { Bundle.main.bundleIdentifier == cageUpdateBundleID + ".macos-trial" }
     static func configURL() -> URL {
+        if macGuestTrial {
+            return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude-cage/macos-trial/config.json")
+        }
         if let path = ProcessInfo.processInfo.environment["CLAUDE_CAGE_CONFIG"], !path.isEmpty {
             return URL(fileURLWithPath: path).standardizedFileURL
         }
@@ -269,6 +273,12 @@ final class CageAppUpdater {
         }
     }
     func handle(_ operation: String) -> [String: Any] {
+        if Bundle(url: bundleURL)?.bundleIdentifier == cageUpdateBundleID + ".macos-trial" {
+            if state["phase"] as? String != "manual" {
+                change(["phase": "manual", "message": "macOS 客机试用版通过本机安装更新。"])
+            }
+            return state
+        }
         if Bundle(url: bundleURL)?.object(forInfoDictionaryKey: "CageClientOnly") as? Bool == true {
             if state["phase"] as? String != "manual" || operation != "status" {
                 change(["phase": "manual", "message": "轻量客户端使用独立安装包更新；连接配置会保留，云端任务不受影响。"])
@@ -276,6 +286,8 @@ final class CageAppUpdater {
             return state
         }
         let busy = ["checking", "downloading", "downloaded", "verifying", "installing"].contains(state["phase"] as? String ?? "")
+        if ["check", "install"].contains(operation), let value = state["retryAt"] as? String,
+           let date = ISO8601DateFormatter().date(from: value), date > Date() { return state }
         switch operation {
         case "status": break
         case "check": if !busy && worker == nil && validationTask == nil && installer == nil && prepared == nil { startDownload(checkOnly: true) }
@@ -332,11 +344,11 @@ final class CageAppUpdater {
         for (key, value) in values { state[key] = value }
         onChange(state)
     }
-    private func failure(_ message: String) { change(["phase": "failed", "message": message, "retryable": true]) }
+    private func failure(_ message: String, retryAt: String = "") { change(["phase": "failed", "message": message, "retryable": true, "retryAt": retryAt]) }
     private var cage: URL { bundleURL.appendingPathComponent("Contents/Resources/cage") }
     private func startDownload(checkOnly: Bool) {
         generation += 1; let operation = generation
-        change(["phase": "checking", "message": "正在通过所选代理检查更新", "receivedBytes": 0, "totalBytes": 0, "retryable": false])
+        change(["phase": "checking", "message": "正在通过所选代理检查更新", "receivedBytes": 0, "totalBytes": 0, "retryable": false, "retryAt": ""])
         let process = Process(); process.executableURL = cage; process.arguments = ["app-update", checkOnly ? "check" : "download"]
         let pipe = Pipe(); process.standardOutput = pipe; process.standardError = FileHandle.nullDevice
         worker = process
@@ -362,7 +374,7 @@ final class CageAppUpdater {
                 if self.worker === process { self.worker = nil }
                 guard self.generation == operation else { return }
                 if process.terminationStatus != 0 {
-                    self.failure(result?["message"] as? String ?? "更新请求未完成，请重试")
+                    self.failure(result?["message"] as? String ?? "更新请求未完成，请重试", retryAt: result?["retryAt"] as? String ?? "")
                 } else if !checkOnly, let result, result["phase"] as? String == "downloaded" {
                     self.verifyDownload(result, operation: operation)
                 }

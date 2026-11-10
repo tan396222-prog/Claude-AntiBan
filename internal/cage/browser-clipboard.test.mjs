@@ -113,6 +113,20 @@ test("host copy context reaches every existing frame and newly attached child", 
   assert.equal(observer.sessions.size, 0);
 });
 
+test("private clipboard format notifications require an enabled receiver and the binding token", async () => {
+  for (const includeChanges of [false, true]) {
+    const copies = [];
+    const observer = new BrowserClipboard(async () => ({}), value => copies.push(value), { includeChanges });
+    await observer.attach("session", "tab");
+    const state = observer.sessions.get("session");
+    observer.event({ sessionId: "session", method: "Runtime.executionContextCreated", params: { context: { id: 1, auxData: { isDefault: true, frameId: "frame" } } } });
+    for (const token of ["wrong", state.token]) observer.event({ sessionId: "session", method: "Runtime.bindingCalled", params: {
+      name: state.name, executionContextId: 1, payload: JSON.stringify({ token, context: "gesture", changed: true }),
+    } });
+    assert.deepEqual(copies, includeChanges ? [{ id: "tab", context: "gesture", changed: true }] : []);
+  }
+});
+
 test("failed setup removes the session and allows retry", async () => {
   let fail = true;
   const observer = new BrowserClipboard(

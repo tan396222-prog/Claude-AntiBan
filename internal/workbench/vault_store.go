@@ -30,8 +30,9 @@ type vaultEntry struct {
 	Updated  string `json:"updated"`
 }
 type vaultData struct {
-	Entries []vaultEntry `json:"entries"`
-	Blocked []string     `json:"blocked"`
+	Entries        []vaultEntry      `json:"entries"`
+	Blocked        []string          `json:"blocked"`
+	GuestPasswords map[string]string `json:"guest_passwords,omitempty"`
 }
 type vaultEnvelope struct {
 	Version int    `json:"version"`

@@ -28,6 +28,7 @@ try {
         Invoke-BuildTool $npm @('--prefix', 'ui', 'run', 'build')
     }
     if (-not (Test-Path -LiteralPath 'internal/workbench/web/index.html')) { throw 'Build the UI before using -SkipUI.' }
+    if ($SkipUI) { Invoke-BuildTool $node @('ui/scripts/verify-build.mjs') }
     $env:GOOS = 'windows'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
     $goDependencies = & $go 'list' '-deps' './cmd/cage-client'
     if ($LASTEXITCODE -ne 0 -or ($goDependencies -match 'internal/limaembed|github.com/lima-vm/lima/v2|github.com/Code-Hex/vz')) { throw 'Client dependency check failed or includes a virtual machine runtime.' }
@@ -74,6 +75,10 @@ Cage 轻量远程客户端（未签名开发构建）
 此目录为独立构建产物，不会安装、替换完整 Cage 或自动下载完整 Cage 更新。
 本构建未签名或发布。Windows 原生运行验收范围以项目测试报告为准。
 '@)
+    if ($IsWindows) {
+        Invoke-BuildTool (Join-Path $resources 'cage.exe') @('verify-web-assets')
+        Assert-WindowsWorkbench $app
+    }
     Compress-Archive -Path $app -DestinationPath (Join-Path $result 'Cage-Client-windows-amd64.zip') -CompressionLevel Optimal
     if (Test-Path -LiteralPath $destination) { throw 'Client output already exists; no files were replaced.' }
     Move-Item -LiteralPath $result -Destination $destination

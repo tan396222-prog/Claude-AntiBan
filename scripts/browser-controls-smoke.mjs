@@ -119,7 +119,7 @@ try {
     .replaceAll("/usr/local/lib/cage-split", join(directory, "split-extension"))
     .replace("/etc/claude-cage/browser-control.json", join(directory, "control.json"))
     .replace(listen, 'server.listen(0, "127.0.0.1", () => console.log("CONTROL_PORT=" + server.address().port));'));
-  for (const name of ["browser-audit", "browser-downloads", "browser-uploads", "browser-login", "browser-vault", "browser-clipboard", "native-input"])
+  for (const name of ["browser-audit", "browser-downloads", "browser-uploads", "browser-login", "browser-private", "browser-cookies", "browser-extensions", "browser-vault", "browser-clipboard", "native-input"])
     await copyFile(new URL(`../internal/cage/${name}.mjs`, import.meta.url), join(directory, `${name}.mjs`));
   await cp(new URL("../internal/cage/split-extension", import.meta.url), join(directory, "split-extension"), { recursive: true });
   await writeFile(join(directory, "control.json"), JSON.stringify({ token, workspace: directory }));
@@ -178,11 +178,16 @@ try {
   assert.equal(restored.tabs.length, 1);
   assert.equal(restored.tabs[0].url, origin + "/third");
   await api("/close", { id: restored.active });
-  assert.equal((await api("/tabs")).tabs.length, 1, "Closing the last tab must create a homepage tab");
+  const empty = await api("/tabs");
+  assert.equal(empty.tabs.length, 0, "Closing the last tab must leave the browser empty");
+  assert.equal(empty.active, "");
+  await waitFor(() => eventState?.tabs.length === 0 && eventState.active === "", "empty browser events");
+  const reopened = await api("/new", { url: origin + "/first" });
+  assert.equal((await api("/tabs")).active, reopened.id);
   console.log(JSON.stringify({
     webdriver: false, newTab: true, activate: true, navigate: true,
     back: true, forward: true, reload: true, close: true,
-    sessionRestored: true, cookiesPreserved: true, lastTabReplaced: true,
+    sessionRestored: true, cookiesPreserved: true, lastTabClosed: true, reopened: true,
     unauthenticatedRejected: true, crossOriginRejected: true,
   }));
 } finally {

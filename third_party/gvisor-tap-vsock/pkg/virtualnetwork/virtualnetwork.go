@@ -12,6 +12,7 @@ import (
 	"github.com/containers/gvisor-tap-vsock/pkg/tap"
 	"github.com/containers/gvisor-tap-vsock/pkg/types"
 	"gvisor.dev/gvisor/pkg/tcpip"
+	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/sniffer"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
@@ -78,6 +79,9 @@ func New(configuration *types.Configuration) (*VirtualNetwork, error) {
 		return nil, fmt.Errorf("cannot create network stack: %w", err)
 	}
 
+	if configuration.DroppedIPv6 != nil && stack.NetworkProtocolInstance(header.IPv6ProtocolNumber) == nil {
+		networkSwitch.SetDroppedIPv6(configuration.DroppedIPv6)
+	}
 	mux, err := addServices(configuration, stack, ipPool)
 	if err != nil {
 		return nil, fmt.Errorf("cannot add network services: %w", err)

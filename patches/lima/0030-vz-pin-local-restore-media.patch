@@ -1,0 +1,209 @@
+--- /dev/null
++++ b/pkg/fileutils/restore_digest_darwin.go
+@@ -0,0 +1,67 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package fileutils
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"io"
++	"os"
++	"syscall"
++
++	"github.com/opencontainers/go-digest"
++)
++
++// RestoreImageDigest hashes one regular file and checks that the same version is
++// still selected at its pathname. selected may precede Apple's compatibility check.
++func RestoreImageDigest(ctx context.Context, path string, selected os.FileInfo) (digest.Digest, error) {
++	if err := ctx.Err(); err != nil {
++		return "", err
++	}
++	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	before, err := f.Stat()
++	if err != nil {
++		return "", err
++	}
++	if !before.Mode().IsRegular() {
++		return "", errors.New("macOS restore image must be a regular file")
++	}
++	if selected != nil && !sameRestoreImage(selected, before) {
++		return "", fmt.Errorf("macOS restore image changed before hashing: %q", path)
++	}
++	d := digest.SHA256.Digester()
++	buf := make([]byte, 1024*1024)
++	for {
++		if err := ctx.Err(); err != nil {
++			return "", err
++		}
++		n, err := f.Read(buf)
++		_, _ = d.Hash().Write(buf[:n])
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			return "", err
++		}
++	}
++	after, err := os.Lstat(path)
++	if err != nil || !sameRestoreImage(before, after) {
++		return "", fmt.Errorf("macOS restore image changed during hashing: %q", path)
++	}
++	if err := ctx.Err(); err != nil {
++		return "", err
++	}
++	return d.Digest(), nil
++}
++
++func sameRestoreImage(a, b os.FileInfo) bool {
++	// ctime detects an in-place rewrite even when the owner restores mtime.
++	return os.SameFile(a, b) && a.Size() == b.Size() && a.ModTime().Equal(b.ModTime()) &&
++		a.Sys().(*syscall.Stat_t).Ctimespec == b.Sys().(*syscall.Stat_t).Ctimespec
++}
+--- a/pkg/driver/vz/vz_driver_darwin.go
++++ b/pkg/driver/vz/vz_driver_darwin.go
+@@ -18,16 +18,19 @@
+ 	"time"
+ 
+ 	"github.com/Code-Hex/vz/v3"
++	continuityfs "github.com/containerd/continuity/fs"
+ 	"github.com/coreos/go-semver/semver"
+ 	"github.com/docker/go-units"
+ 	"github.com/lima-vm/go-qcow2reader/image"
+ 	"github.com/lima-vm/go-qcow2reader/image/asif"
+ 	"github.com/lima-vm/go-qcow2reader/image/raw"
++	"github.com/opencontainers/go-digest"
+ 	"github.com/sirupsen/logrus"
+ 	"golang.org/x/sys/unix"
+ 
+ 	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/driverutil"
++	"github.com/lima-vm/lima/v2/pkg/fileutils"
+ 	"github.com/lima-vm/lima/v2/pkg/guestpatch/macos"
+ 	"github.com/lima-vm/lima/v2/pkg/hostagent/events"
+ 	"github.com/lima-vm/lima/v2/pkg/imgutil/nativeimgutil"
+@@ -427,7 +430,62 @@
+ 	return nil
+ }
+ 
++// verifiedMacOSIPSW runs under the instance's restore lock. It checks the
++// actual private installer input, including media left after an interruption.
++func verifiedMacOSIPSW(ctx context.Context, inst *limatype.Instance) (string, error) {
++	if err := ensureIPSW(inst.Dir); err != nil {
++		return "", err
++	}
++	ipsw := filepath.Join(inst.Dir, filenames.ImageIPSW)
++	images := inst.Config.Images
++	if len(images) != 1 || !filepath.IsAbs(images[0].Location) || images[0].Digest == "" {
++		return ipsw, nil
++	}
++	expected := images[0].Digest
++	if err := expected.Validate(); err != nil {
++		return "", err
++	}
++	if expected.Algorithm() != digest.SHA256 {
++		return ipsw, nil
++	}
++	actual, err := fileutils.RestoreImageDigest(ctx, ipsw, nil)
++	if err != nil {
++		return "", err
++	}
++	if actual == expected {
++		return ipsw, nil
++	}
++	// Recover a stale private copy if the selected source is available again.
++	// Copy-on-write on APFS freezes the bytes at clone time. Only a verified
++	// copy can replace the private input; the selected file stays untouched.
++	tmpDir, err := os.MkdirTemp(inst.Dir, ".ipsw-repair-")
++	if err != nil {
++		return "", err
++	}
++	defer os.Remove(tmpDir)
++	staging := filepath.Join(tmpDir, "restore.ipsw")
++	defer os.Remove(staging)
++	if err := continuityfs.CopyFile(staging, images[0].Location); err != nil {
++		return "", fmt.Errorf("private IPSW digest mismatch; cannot recover the selected source: %w", err)
++	}
++	actual, err = fileutils.RestoreImageDigest(ctx, staging, nil)
++	if err != nil {
++		return "", err
++	}
++	if actual != expected {
++		return "", fmt.Errorf("macOS restore image digest mismatch: expected %s, got %s", expected, actual)
++	}
++	if err := os.Rename(staging, ipsw); err != nil {
++		return "", err
++	}
++	return ipsw, nil
++}
++
+ func (l *LimaVzDriver) createDiskMacOSGuest(ctx context.Context, disk string) error {
++	ipsw, err := verifiedMacOSIPSW(ctx, l.Instance)
++	if err != nil {
++		return err
++	}
+ 	diskSize, err := units.RAMInBytes(*l.Instance.Config.Disk)
+ 	if err != nil {
+ 		return fmt.Errorf("invalid disk size %#q: %w", *l.Instance.Config.Disk, err)
+@@ -447,11 +505,6 @@
+ 	default:
+ 		return fmt.Errorf("unsupported disk format for macOS guest: %s", l.diskImageFormat)
+ 	}
+-
+-	if err = ensureIPSW(l.Instance.Dir); err != nil {
+-		return err
+-	}
+-	ipsw := filepath.Join(l.Instance.Dir, filenames.ImageIPSW)
+ 
+ 	vm, err := createVMForMacInstaller(ctx, l.Instance, disk)
+ 	if err != nil {
+--- a/pkg/driver/vz/vz_driver_darwin_test.go
++++ b/pkg/driver/vz/vz_driver_darwin_test.go
+@@ -18,6 +18,7 @@
+ 	applevz "github.com/Code-Hex/vz/v3"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype"
+ 	"github.com/lima-vm/lima/v2/pkg/limatype/filenames"
++	"github.com/opencontainers/go-digest"
+ )
+ 
+ func TestOffscreenGuestDisplay(t *testing.T) {
+@@ -104,3 +105,31 @@
+ 	// Removing a PID file that does not exist is not an error.
+ 	l.removePIDFile()
+ }
++
++func TestPinnedMacOSRestoreChecksPrivateInstallerInput(t *testing.T) {
++	dir := t.TempDir()
++	source := filepath.Join(t.TempDir(), "selected.ipsw")
++	image := filepath.Join(dir, filenames.Image)
++	target := filepath.Join(dir, filenames.ImageIPSW)
++	for _, path := range []string{source, image} {
++		assert.NilError(t, os.WriteFile(path, []byte("changed"), 0o600))
++	}
++	cfg := &limatype.LimaYAML{Images: []limatype.Image{{File: limatype.File{Location: source, Digest: digest.FromString("selected")}}}}
++	inst := &limatype.Instance{Dir: dir, Config: cfg}
++	_, err := verifiedMacOSIPSW(t.Context(), inst)
++	assert.ErrorContains(t, err, "digest mismatch")
++	// The original source returns. An interrupted attempt's private image
++	// must be repaired before the native installer can use it.
++	assert.NilError(t, os.WriteFile(source, []byte("selected"), 0o600))
++	got, err := verifiedMacOSIPSW(t.Context(), inst)
++	assert.NilError(t, err)
++	assert.Equal(t, got, target)
++	assert.NilError(t, os.WriteFile(source, []byte("changed again"), 0o600))
++	data, err := os.ReadFile(target)
++	assert.NilError(t, err)
++	assert.Equal(t, string(data), "selected")
++	// A restart can reuse the verified private copy without the original.
++	assert.NilError(t, os.Remove(source))
++	_, err = verifiedMacOSIPSW(t.Context(), inst)
++	assert.NilError(t, err)
++}

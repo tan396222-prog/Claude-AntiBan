@@ -18,7 +18,11 @@ case "${1:-}" in
       set -- /new "$1"
     fi
     ;;
-  *) echo 'Only HTTP(S) browser URLs and Claude desktop callbacks are accepted.' >&2; exit 2;;
+  *)
+    # File operations belong to the desktop session, never the browser control
+    # token. The host resolves them only within Cage project directories.
+    exec /usr/local/bin/cage-desktop-files --open "${1:-}"
+    ;;
 esac
 # sudo records its arguments in the system journal. Send the URL on stdin.
 browser_request() {

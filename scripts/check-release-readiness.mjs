@@ -2,7 +2,6 @@
 const required = [
   'CAGE_MACOS_P12_BASE64', 'CAGE_MACOS_P12_PASSWORD', 'CAGE_MACOS_SIGNING_IDENTITY',
   'CAGE_MACOS_NOTARY_KEY_BASE64', 'CAGE_MACOS_NOTARY_KEY_ID', 'CAGE_MACOS_NOTARY_ISSUER_ID',
-  'CAGE_WINDOWS_QEMU_SOURCE_URL', 'CAGE_WINDOWS_QEMU_SOURCE_SHA256',
 ];
 const provider = process.env.CAGE_WINDOWS_SIGNING_PROVIDER || 'certificate-store';
 if (provider === 'esigner') {
@@ -20,12 +19,6 @@ if (missing.length) {
   if (provider === 'esigner' && (!/^[0-9a-f-]{36}$/i.test(process.env.CAGE_ESIGNER_CREDENTIAL_ID) ||
     !/^[0-9a-f]{32,40}$/i.test(process.env.CAGE_ESIGNER_CERTIFICATE_SERIAL))) {
     throw new Error('Invalid eSigner credential ID or expected certificate serial.');
-  }
-  let source;
-  try { source = new URL(process.env.CAGE_WINDOWS_QEMU_SOURCE_URL); }
-  catch { throw new Error('Reviewed QEMU source requires a valid public HTTPS URL.'); }
-  if (source.protocol !== 'https:' || source.username || source.password || source.search || source.hash || !/^[0-9a-f]{64}$/i.test(process.env.CAGE_WINDOWS_QEMU_SOURCE_SHA256)) {
-    throw new Error('Reviewed QEMU source requires a credential-free HTTPS URL and SHA-256.');
   }
   if (!process.env.CAGE_MACOS_SIGNING_IDENTITY.startsWith('Developer ID Application:')) throw new Error('macOS releases require a Developer ID Application identity.');
   console.log('Release configuration is present. Platform jobs will verify the credentials, signatures and corresponding sources.');

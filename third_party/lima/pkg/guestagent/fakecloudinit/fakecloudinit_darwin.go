@@ -186,6 +186,10 @@ func mountVirtiofs(pseudoTag, dir string) error {
 }
 
 func setTimezone(ctx context.Context, timezone string) error {
+	// systemsetup lists GMT as its UTC zone on macOS.
+	if timezone == "Etc/UTC" || timezone == "UTC" {
+		timezone = "GMT"
+	}
 	cmd := exec.CommandContext(ctx, "systemsetup", "-settimezone", timezone)
 	logrus.Infof("Executing command: %v", cmd.Args)
 	if output, err := cmd.CombinedOutput(); err != nil {

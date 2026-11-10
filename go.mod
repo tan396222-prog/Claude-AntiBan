@@ -2,8 +2,7 @@ module github.com/sylvinus/agent-vm
 
 go 1.26.10
 
-// Lima, sshocker and pkg/sftp are built from third_party/: upstream plus
-// patches/ (see scripts/third-party-sync). These replaces only apply when
+// Bundled dependencies are built from third_party/. These replaces only apply when
 // this module is the main one, so `go install ...@latest` does not build
 // agent-vm: releases ship binaries.
 replace (
@@ -29,6 +28,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
 	github.com/sirupsen/logrus v1.10.2
+	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/sys v0.48.0
 	golang.org/x/term v0.46.0

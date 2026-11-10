@@ -311,6 +311,7 @@
 .account-device-option {
   display: flex;
   align-items: flex-start;
+  text-align: left;
   gap: 12px;
   margin: 20px 0;
   cursor: var(--control-cursor);

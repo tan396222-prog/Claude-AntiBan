@@ -20,6 +20,10 @@ func (o Outbound) Allows(network string, dst netip.AddrPort) bool {
 type DialContext func(context.Context, string, string) (net.Conn, error)
 
 type Configuration struct {
+	// DroppedIPv6 observes guest IPv6 payloads discarded at ingress by an
+	// IPv4-only stack. It does not receive frames when IPv6 is supported.
+	DroppedIPv6 func([]byte) `yaml:"-" json:"-"`
+
 	DialContext DialContext                                       `yaml:"-"`
 	DNSExchange func(context.Context, *dns.Msg) (*dns.Msg, error) `yaml:"-"`
 	// Print packets on stderr

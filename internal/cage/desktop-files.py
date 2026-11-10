@@ -13,12 +13,24 @@ import socketserver
 import subprocess
 import sys
 import threading
+import time
 import uuid
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 LIMIT = 2 * 1024 ** 3
 PORTAL = 'org.freedesktop.portal.FileChooser'
 ROOT = '/org/freedesktop/portal/desktop'
+
+
+def image_context():
+    result = subprocess.run(['/usr/local/bin/cage-native-input', '--request'],
+                            input=b'{"mode":"status"}\n', stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, check=True, timeout=4)
+    value = json.loads(result.stdout)
+    context = value.get('context', '')
+    if value.get('available') is not True or not re.fullmatch('[a-f0-9]{32}', context):
+        raise ValueError('图片接收位置尚未聚焦，请点击输入框后重试')
+    return context
 
 
 class Broker:
@@ -31,23 +43,71 @@ class Broker:
         self.lock = threading.RLock()
 
     def start(self, kind='paste', multiple=True, **metadata):
-        if kind not in ('paste', 'drop', 'chooser', 'save'):
+        if kind not in ('paste', 'drop', 'image', 'chooser', 'save', 'open'):
             raise ValueError('文件传递方式无效')
+        if kind == 'image':
+            metadata['image_context'] = image_context()
+            multiple = False
         with self.lock:
             if len(self.requests) >= 32:
                 raise ValueError('请先完成已打开的文件窗口')
             key = str(uuid.uuid4())
             self.requests[key] = dict(id=key, kind=kind, multiple=multiple,
-                                      files=[], busy=False, **metadata)
+                                      files=[], busy=False, created=time.monotonic(), **metadata)
         return {'id': key}
 
     def snapshot(self):
         with self.lock:
+            for key, request in list(self.requests.items()):
+                if request['kind'] == 'open' and time.monotonic() - request['created'] > 60:
+                    self.complete_open(key, '本机文件操作已超时，请重新打开')
             return {'uploads': [dict(id=r['id'], multiple=r['multiple'],
                                      title=r.get('title', ''), target='desktop',
                                      directory=r.get('directory', False))
                                 for r in self.requests.values() if r['kind'] == 'chooser'],
-                    'downloads': self.downloads.snapshot() if self.downloads else []}
+                    'downloads': self.downloads.snapshot() if self.downloads else [],
+                    'opens': [{'id': r['id']} for r in self.requests.values()
+                              if r['kind'] == 'open' and not r['busy']]}
+
+    def open_path(self, path, action='open', **metadata):
+        if action not in ('open', 'reveal') or not isinstance(path, str) or not path or '\x00' in path:
+            raise ValueError('文件打开请求无效')
+        if path.startswith('file:'):
+            uri = urlsplit(path)
+            if uri.scheme != 'file' or uri.netloc not in ('', 'localhost') or uri.query or uri.fragment:
+                raise ValueError('请选择本机项目中的文件')
+            path = unquote(uri.path, errors='strict')
+        if not Path(path).is_absolute():
+            raise ValueError('文件打开请求需要绝对路径')
+        path = str(Path(path).resolve(strict=True))
+        return self.start('open', False, path=path, action=action, **metadata)
+
+    def claim_open(self, key):
+        with self.lock:
+            request = self.requests.get(key)
+            if not request or request['kind'] != 'open' or request['busy']:
+                return {'handled': True}
+            if time.monotonic() - request['created'] > 60:
+                self.complete_open(key, '本机文件操作已超时，请重新打开')
+                return {'handled': True}
+            request['busy'] = True
+            path = request['path']
+            if self.downloads:
+                try:
+                    path = self.downloads.host_visible_path(path)
+                except ValueError as error:
+                    return {'error': str(error)}
+            return {'id': key, 'path': path, 'action': request['action']}
+
+    def complete_open(self, key, error=''):
+        with self.lock:
+            request = self.requests.get(key)
+            if not request or request['kind'] != 'open':
+                return {'ok': True}
+            del self.requests[key]
+        if request.get('handle'):
+            self.deliver(request, None if error else [])
+        return {'ok': True}
 
     def get(self, key):
         if key not in self.requests:
@@ -96,7 +156,7 @@ class Broker:
     def finish(self, key):
         with self.lock:
             request = self.get(key)
-            if request['busy'] or not request['files']:
+            if request['kind'] == 'image' or request['busy'] or not request['files']:
                 raise ValueError('请先选择并传递文件')
             request['busy'] = True
         try:
@@ -110,6 +170,20 @@ class Broker:
         except Exception:
             self.cancel(key)
             raise
+
+    def finish_image(self, key):
+        with self.lock:
+            request = self.get(key)
+            if request['kind'] != 'image' or request['busy'] or len(request['files']) != 1:
+                raise ValueError('图片没有完整收到')
+            request['busy'] = True
+        try:
+            if image_context() != request['image_context']:
+                raise ValueError('图片接收位置已变化，请重新粘贴')
+            paste_files(request['files'], expected_context=request['image_context'])
+            return {'ok': True}
+        finally:
+            self.cancel(key)
 
     def cancel(self, key, respond=True):
         with self.lock:
@@ -193,6 +267,8 @@ class Handler(BaseHTTPRequestHandler):
                     result = broker.start(value.get('kind', 'paste'))
                 elif route.path == '/finish':
                     result = broker.finish(value.get('id', ''))
+                elif route.path == '/finish-image':
+                    result = broker.finish_image(value.get('id', ''))
                 elif route.path == '/cancel':
                     key = value.get('id', '')
                     if not re.fullmatch(r'[0-9a-f-]{36}', key):
@@ -200,6 +276,12 @@ class Handler(BaseHTTPRequestHandler):
                     result = broker.cancel(key)
                 elif route.path == '/directory':
                     result = broker.choose_directory(value.get('id', ''), value.get('path', ''))
+                elif route.path == '/open':
+                    result = broker.open_path(value.get('path', ''), value.get('action', 'open'))
+                elif route.path == '/open-claim':
+                    result = broker.claim_open(value.get('id', ''))
+                elif route.path == '/open-complete':
+                    result = broker.complete_open(value.get('id', ''), value.get('error', ''))
                 elif route.path == '/download-retry' and broker.downloads:
                     result = broker.downloads.retry(value.get('id', ''))
                 else:
@@ -239,6 +321,13 @@ class Portal:
         <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
       <method name="SaveFile"><arg type="s" direction="in"/><arg type="s" direction="in"/>
         <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
+      </interface><interface name="org.freedesktop.portal.OpenURI">
+      <property name="version" type="u" access="read"/>
+      <method name="OpenDirectory"><arg type="s" direction="in"/><arg type="h" direction="in"/>
+        <arg type="a{sv}" direction="in"/><arg type="o" direction="out"/></method>
+      </interface><interface name="org.freedesktop.FileManager1">
+      <method name="ShowItems"><arg type="as" direction="in"/><arg type="s" direction="in"/></method>
+      <method name="ShowFolders"><arg type="as" direction="in"/><arg type="s" direction="in"/></method>
       </interface><interface name="org.freedesktop.portal.Request">
       <method name="Close"/><signal name="Response"><arg type="u"/><arg type="a{sv}"/></signal>
       </interface></node>'''
@@ -280,6 +369,17 @@ class Portal:
         self.unref(name_reply)
         if code_value != 1:
             raise RuntimeError('已有其他桌面文件选择服务')
+        name_reply = call(self.connection, b'org.freedesktop.DBus', b'/org/freedesktop/DBus', b'org.freedesktop.DBus',
+                         b'RequestName', self.tuple(self.new_string(b'org.freedesktop.FileManager1'), self.new_uint(4)),
+                         None, 0, 5000, None, None)
+        if not name_reply:
+            raise RuntimeError('本机文件打开服务无法注册')
+        code = self.child(name_reply, 0)
+        code_value = bind(self.glib, 'g_variant_get_uint32', u, p)(code)
+        self.unref(code)
+        self.unref(name_reply)
+        if code_value != 1:
+            raise RuntimeError('已有其他文件管理服务')
         self.reply = bind(self.gio, 'g_dbus_method_invocation_return_value', None, p, p)
         self.error = bind(self.gio, 'g_dbus_method_invocation_return_dbus_error', None, p, s, s)
         self.emit = bind(self.gio, 'g_dbus_connection_emit_signal', C.c_int, p, s, s, s, s, p, p)
@@ -296,6 +396,10 @@ class Portal:
         self.vtable = VTable(self.method_callback, self.property_callback, None)
         if not self.register(self.connection, ROOT.encode(), self.interface(self.node, PORTAL.encode()), C.byref(self.vtable), None, None, None):
             raise RuntimeError('桌面文件选择接口无法注册')
+        for object_path, interface in ((ROOT, 'org.freedesktop.portal.OpenURI'),
+                                       ('/org/freedesktop/FileManager1', 'org.freedesktop.FileManager1')):
+            if not self.register(self.connection, object_path.encode(), self.interface(self.node, interface.encode()), C.byref(self.vtable), None, None, None):
+                raise RuntimeError('本机文件打开接口无法注册')
         self.loop = bind(self.glib, 'g_main_loop_new', p, p, C.c_int)(None, False)
 
     def tuple(self, *values):
@@ -319,6 +423,22 @@ class Portal:
 
     def method(self, _connection, sender, path, _interface, method, parameters, invocation, _data):
         try:
+            if method in (b'ShowItems', b'ShowFolders'):
+                uris = self.child(parameters, 0)
+                try:
+                    count = bind(self.glib, 'g_variant_n_children', C.c_size_t, C.c_void_p)(uris)
+                    if count > 32:
+                        raise ValueError('一次最多打开 32 个位置')
+                    for index in range(count):
+                        uri = self.child(uris, index)
+                        try:
+                            self.broker.open_path(self.string(uri, None).decode(), 'reveal' if method == b'ShowItems' else 'open')
+                        finally:
+                            self.unref(uri)
+                finally:
+                    self.unref(uris)
+                self.reply(invocation, self.tuple())
+                return
             if method == b'Close':
                 request = next((r for r in self.broker.requests.values() if r.get('handle') == path.decode() and r.get('sender') == sender.decode()), None)
                 if request:
@@ -342,9 +462,24 @@ class Portal:
                 key = None
                 try:
                     saving = method == b'SaveFile'
-                    key = self.broker.start('save' if saving else 'chooser', self.option(options, 'multiple', False) and not directory,
-                                      directory=directory,
-                                      handle=handle, sender=sender.decode(), title=self.string(title, None).decode())['id']
+                    if method == b'OpenDirectory':
+                        # The handle belongs to the caller's D-Bus message, not
+                        # to this service's file descriptor table.
+                        message = bind(self.gio, 'g_dbus_method_invocation_get_message', C.c_void_p, C.c_void_p)(invocation)
+                        descriptors = bind(self.gio, 'g_dbus_message_get_unix_fd_list', C.c_void_p, C.c_void_p)(message)
+                        index = bind(self.glib, 'g_variant_get_handle', C.c_int, C.c_void_p)(title)
+                        fd = bind(self.gio, 'g_unix_fd_list_get', C.c_int, C.c_void_p, C.c_int, C.c_void_p)(descriptors, index, None) if descriptors else -1
+                        if fd < 0:
+                            raise ValueError('文件位置无法读取')
+                        try:
+                            key = self.broker.open_path(os.readlink('/proc/self/fd/' + str(fd)), 'reveal',
+                                                       handle=handle, sender=sender.decode())['id']
+                        finally:
+                            os.close(fd)
+                    else:
+                        key = self.broker.start('save' if saving else 'chooser', self.option(options, 'multiple', False) and not directory,
+                                          directory=directory,
+                                          handle=handle, sender=sender.decode(), title=self.string(title, None).decode())['id']
                     if saving:
                         if not self.broker.downloads:
                             raise ValueError('下载服务不可用')
@@ -373,14 +508,14 @@ class Portal:
             self.unregister(self.connection, object_id)
 
     def deliver(self, request, paths):
-        if request['kind'] not in ('chooser', 'save'):
+        if request['kind'] not in ('chooser', 'save', 'open'):
             paste_files(paths)
             return
         entries = []
-        if paths is not None:
+        if paths is not None and request['kind'] != 'open':
             uris = self.array('s', [self.new_string(Path(path).as_uri().encode()) for path in paths])
             entries.append(self.new_entry(self.new_string(b'uris'), self.new_variant(uris)))
-        response = self.tuple(self.new_uint(0 if paths is not None else 1), self.array('{sv}', entries))
+        response = self.tuple(self.new_uint(0 if paths is not None else (2 if request['kind'] == 'open' else 1)), self.array('{sv}', entries))
         if not self.emit(self.connection, request['sender'].encode(), request['handle'].encode(),
                          b'org.freedesktop.portal.Request', b'Response', response, None):
             raise ValueError('原文件窗口已关闭')
@@ -390,10 +525,11 @@ class Portal:
         bind(self.glib, 'g_main_loop_run', None, C.c_void_p)(self.loop)
 
 
-def paste_files(paths):
+def paste_files(paths, expected_context=None):
     process = subprocess.Popen([sys.executable, __file__, '--clipboard'], stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    process.stdin.write(json.dumps(paths).encode())
+    value = paths if expected_context is None else dict(paths=paths, image_context=expected_context)
+    process.stdin.write(json.dumps(value).encode())
     process.stdin.close()
     try:
         ready, _, _ = select.select([process.stdout], [], [], 10)
@@ -405,7 +541,7 @@ def paste_files(paths):
         process.stdout.close()
 
 
-def clipboard(paths):
+def clipboard(paths, expected_context=None):
     gtk, gdk, glib = (C.CDLL(name) for name in ('libgtk-3.so.0', 'libgdk-3.so.0', 'libglib-2.0.so.0'))
     p = C.c_void_p
     if not bind(gtk, 'gtk_init_check', C.c_int, p, p)(None, None):
@@ -421,9 +557,18 @@ def clipboard(paths):
         _fields_ = [('target', C.c_char_p), ('flags', C.c_uint), ('info', C.c_uint)]
     provide_type = C.CFUNCTYPE(None, p, p, C.c_uint, p)
     clear_type = C.CFUNCTYPE(None, p, p)
-    names = [b'text/uri-list', b'x-special/gnome-copied-files']
-    uris = [Path(path).as_uri() for path in paths]
-    payloads = [('\r\n'.join(uris) + '\r\n').encode(), ('copy\n' + '\n'.join(uris)).encode()]
+    if expected_context is not None:
+        if len(paths) != 1 or image_context() != expected_context:
+            raise ValueError('图片接收位置已变化，请重新粘贴')
+        with open(paths[0], 'rb') as image:
+            data = image.read(20 * 1024 * 1024 + 1)
+        if len(data) > 20 * 1024 * 1024 or not data.startswith(b'\x89PNG\r\n\x1a\n'):
+            raise ValueError('PNG 图片无效')
+        names, payloads = [b'image/png'], [data]
+    else:
+        names = [b'text/uri-list', b'x-special/gnome-copied-files']
+        uris = [Path(path).as_uri() for path in paths]
+        payloads = [('\r\n'.join(uris) + '\r\n').encode(), ('copy\n' + '\n'.join(uris)).encode()]
     buffers = [C.create_string_buffer(data) for data in payloads]
     acknowledged = False
     @stop_type
@@ -441,12 +586,14 @@ def clipboard(paths):
     @clear_type
     def clear(_clipboard, _data):
         timeout(10000, stop, None)
-    targets = (Target * 2)(*(Target(name, 0, index) for index, name in enumerate(names)))
+    targets = (Target * len(names))(*(Target(name, 0, index) for index, name in enumerate(names)))
     get = bind(gtk, 'gtk_clipboard_get', p, p)
     own = bind(gtk, 'gtk_clipboard_set_with_data', C.c_int, p, C.POINTER(Target), C.c_uint, provide_type, clear_type, p)
-    if not own(get(atom(b'CLIPBOARD')), targets, 2, provide, clear, None):
+    if not own(get(atom(b'CLIPBOARD')), targets, len(names), provide, clear, None):
         raise RuntimeError('clipboard unavailable')
     flush()
+    if expected_context is not None and image_context() != expected_context:
+        raise ValueError('图片接收位置已变化，请重新粘贴')
     subprocess.run(['xdotool', 'key', '--clearmodifiers', 'ctrl+v'], check=True,
                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=3)
     timeout(120000, stop, None)
@@ -454,6 +601,29 @@ def clipboard(paths):
 
 
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == '--open':
+        import http.client
+        import socket
+        class Connection(http.client.HTTPConnection):
+            def connect(self):
+                self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self.sock.settimeout(self.timeout)
+                self.sock.connect('/run/cage-desktop/files.sock')
+        client = Connection('localhost', timeout=5)
+        try:
+            # Electron's folder fallback invokes `xdg-open .` with the target
+            # directory as its cwd. Preserve the caller's cwd across the socket.
+            path = sys.argv[2]
+            if not path.startswith('file:'):
+                path = str(Path(path).resolve(strict=True))
+            client.request('POST', '/open', json.dumps({'path': path}), {'Content-Type': 'application/json'})
+            response = client.getresponse()
+            data = response.read()
+            if response.status != 200:
+                raise ValueError(data.decode())
+        finally:
+            client.close()
+        return
     if len(sys.argv) == 3 and sys.argv[1] == '--save-file':
         # Terminal attachments are independent of the graphical session.
         root = Path.home() / '.local/share/cage/attachments/files'
@@ -470,7 +640,11 @@ def main():
             raise
         return
     if sys.argv[1:] == ['--clipboard']:
-        clipboard(json.load(sys.stdin))
+        value = json.load(sys.stdin)
+        if isinstance(value, dict):
+            clipboard(value['paths'], value['image_context'])
+        else:
+            clipboard(value)
         return
     runtime = Path(os.environ['XDG_RUNTIME_DIR'])
     directory = runtime / 'uploads'

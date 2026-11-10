@@ -82,8 +82,10 @@ read -r cage_cpu_quota cage_cpu_period < "/sys/fs/cgroup$cage_parent/cpu.max"
   echo 'The build parent CPU limit was not applied.' >&2; exit 1;
 }
 cage_network_id=$(engine network create --label "cn.cage.image-build=$cage_build_id" "$cage_network")
+mkdir "$cage_stage/context"
+cp deploy/cloud/Dockerfile.guest deploy/cloud/restore-apt-sources.sh internal/cage/apt-bootstrap.sh "$cage_stage/context/"
 DOCKER_BUILDKIT=0 engine build --cgroup-parent "$cage_slice" --network "$cage_network" \
-  "${cage_base_args[@]}" --file deploy/cloud/Dockerfile.guest --tag "$cage_base" deploy/cloud > "$cage_stage/base-build.log" 2>&1
+  "${cage_base_args[@]}" --file "$cage_stage/context/Dockerfile.guest" --tag "$cage_base" "$cage_stage/context" > "$cage_stage/base-build.log" 2>&1
 cage_container_id=$(engine create --name "$cage_builder" --label "cn.cage.image-build=$cage_build_id" \
   --hostname cage --add-host cage:127.0.1.1 \
   --network "$cage_network" --cgroupns private --cgroup-parent "$cage_slice" --ipc private \

@@ -1,14 +1,17 @@
 import React, { Children, useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useSelectPopup } from "./select-popup";
 import { Check, ChevronDown } from "lucide-react";
 import "./inline-select.css";
 
-// Keep focus on the control while its list occupies space below it.
+// Keep keyboard focus on the control; the popup does not change page layout.
 export function InlineSelect({
   children,
   value,
   onValueChange,
   disabled,
   editable = false,
+  displayLabel,
   ...props
 }) {
   const id = useId();
@@ -42,6 +45,7 @@ export function InlineSelect({
   const active = filtered.findIndex(
     (item) => item.value === cursor && !item.disabled,
   );
+  const position = useSelectPopup(visible, control, list, filtered.length);
   useEffect(() => {
     if (visible && active >= 0) {
       const row = list.current.querySelector(`[data-index="${active}"]`);
@@ -57,9 +61,8 @@ export function InlineSelect({
   }, [visible, active]);
   useEffect(() => {
     if (!open) return;
-    // Collapse after the outside click lands so reflow cannot move its target.
     const outside = (event) => {
-      if (!root.current.contains(event.target)) setOpen(false);
+      if (!root.current.contains(event.target) && !list.current?.contains(event.target)) setOpen(false);
     };
     document.addEventListener("click", outside, true);
     return () => document.removeEventListener("click", outside, true);
@@ -148,17 +151,18 @@ export function InlineSelect({
             open ? setOpen(false) : show();
           }}
         >
-          <span>{selected?.label || value}</span>
+          <span>{displayLabel ?? selected?.label ?? value}</span>
           <ChevronDown size={14} aria-hidden="true" />
         </button>
       )}
-      {visible && (
+      {visible && createPortal(
         <span
           ref={list}
           id={id}
           role="listbox"
           aria-label={(props["aria-label"] || "") + "选项"}
           className="inline-select-list"
+          style={position}
           onMouseDown={(event) => event.preventDefault()}
           onClick={(event) => event.preventDefault()}
         >
@@ -189,7 +193,7 @@ export function InlineSelect({
               </span>
             </React.Fragment>
           ))}
-        </span>
+        </span>, document.body
       )}
     </span>
   );

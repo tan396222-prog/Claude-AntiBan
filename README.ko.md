@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/github/v/release/tan396222-prog/Claude-AntiBan?include_prereleases)](https://github.com/tan396222-prog/Claude-AntiBan/releases) [![CI](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**[프로젝트 웹사이트](https://github.com/tan396222-prog/Claude-AntiBan) · [Français](https://github.com/tan396222-prog/Claude-AntiBan) · [앱 다운로드](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [시작하기](docs/getting-started.md) · [FAQ](docs/troubleshooting.md) · [기여](CONTRIBUTING.md) · [사용 문서 (중국어)](docs/README.md)**
+**[프로젝트 웹사이트](https://github.com/tan396222-prog/Claude-AntiBan) · [앱 다운로드](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [시작하기](docs/getting-started.md) · [FAQ](docs/troubleshooting.md) · [사용 문서 (중국어)](docs/README.md)**
 
 [简体中文](README.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [한국어](README.ko.md) · [Español](README.es.md) · [မြန်မာဘာသာ](README.my.md) · [Беларуская](README.be.md) · [پښتو](README.ps.md) · [دری](README.prs.md) · [አማርኛ](README.am.md) · [Soomaali](README.so.md) · [ትግርኛ](README.ti.md) · [Français](README.fr.md)
 
@@ -18,7 +18,7 @@
 
 클로드와 대화하고 협업하고 싶은 일반 사용자로서 VPS 인스턴스, 브라우저 지문 프로필, 환경 확인을 구성하는 데 지쳤으며 계정 금지 및 금전적 손실을 걱정합니다. 우리는 선물한다 **Claude 防封** — **즉시 사용 가능한 데스크탑 애플리케이션: 자체 네트워크 프록시를 구성하고 격리된 환경, 시간대, 언어 및 환경 확인을 한 곳에서 관리합니다.**
 
-Claude 防封는 Linux 터미널, 브라우저 및 파일 편집기를 단일 데스크톱 애플리케이션에 결합한 경량 Linux 가상 머신입니다. 주요 기능은 다음과 같습니다:
+Claude 防封는 터미널, 브라우저, 편집기와 공식 Claude Desktop을 하나의 격리된 작업 공간에 모읍니다. Mac에서는 macOS 가상 머신을, 지원되는 Windows PC에서는 Windows 가상 머신을 사용하거나 가벼운 Linux 환경을 선택하세요. 필요한 프로젝트만 공유하고 네트워크를 따로 관리하며, SSH로 서버에 연결하거나 휴대폰에서 작업을 이어갈 수 있습니다. 주요 기능:
 
 - 호스트와 격리된 네트워크 설정 Cage는 자체 네트워크 프록시를 통해 환경 내부의 모든 네트워크 트래픽을 라우팅합니다.
 - 네트워크 프록시의 IP 위치에 대한 자동 동기화를 통해 시간대 및 언어를 포함하여 호스트에서 격리된 브라우저 지문 설정
@@ -38,12 +38,14 @@ Claude 防封는 Linux 터미널, 브라우저 및 파일 편집기를 단일 �
 ## 케이지로 할 수 있는 일
 
 - **단일 창에서 작업합니다.** 터미널에서 Claude Code를 실행하고, 편집기에서 변경 사항을 검토하고, Cage 브라우저를 사용하여 서비스를 미리 보고 로그인하세요.
+- **익숙한 시스템에서 개발하세요.** macOS, Windows 또는 Linux 게스트에서 해당 플랫폼의 도구를 사용하거나, 호스트 시스템을 복제해 깨끗하고 독립적인 환경을 만드세요. [게스트 시스템 선택](docs/guide/guest-systems.md)
 - **공유하는 내용을 제어하세요.** 기본 작업공간과 명시적으로 열린 프로젝트 폴더만 공유됩니다. 호스트의 Claude 로그인 상태, 브라우저 프로필 및 SSH 키는 자동으로 가져오지 않습니다.
 - **네트워크 상태를 확인하세요.** 내장된 네트워크 프록시 관리를 통해 구독을 가져오고, 엔드포인트를 선택하고, 종료 IP를 확인할 수 있습니다. 중요한 검사가 통과될 때까지 환경은 오프라인 상태로 유지됩니다. 네트워크 프록시를 사용할 수 없는 경우 직접 연결로 대체할 수 없습니다.
 - **다음에 계속하세요.** 도구, 파일 및 로그인 상태는 가상 디스크에 유지됩니다. 창을 닫아도 백그라운드 작업이 계속 실행될 수 있습니다.
-- **Claude Code 계정을 여러 개 관리하세요.** 새 Claude 터미널에 계정을 배정하고 5시간·7일 사용 한도를 확인할 수 있습니다. 실행 중인 터미널의 계정은 자동으로 바뀌지 않습니다.
-- **휴대폰에서 작업을 이어가세요.** 개발용 모바일 클라이언트로 컴퓨터에 연결해 구조화된 CLI 세션과 도구 승인을 처리합니다. 원격 브라우저는 별도 허용이 필요합니다. 모바일 클라이언트는 소스에서 개발 버전을 빌드해야 하며, 임의의 일반 터미널을 제어하는 기능은 아닙니다.
+- **Claude Code 계정을 여러 개 관리하세요.** 사용 한도를 확인하고 새 세션에 계정을 배정하며, 명시적으로 허용한 뒤 계정을 바꾸어 대화 기록을 이어가세요. [Claude Code](docs/guide/accounts.md)
+- **휴대폰에서 이어서 작업하세요.** QR 코드나 페어링 코드로 Android·iPhone을 컴퓨터에 연결하세요. 같은 Claude Code 대화를 이어가고 메시지를 보내거나 도구 실행을 승인하며, 원격 브라우저와 컴퓨터의 Claude Desktop 창을 조작할 수 있습니다.
 - **클라우드에서 Cage를 실행하세요.** 요구 조건을 충족하는 Linux x86_64 VPS에 Cage를 배포하고 SSH로 연결합니다. KVM은 필요 없으며 데이터와 네트워크 출구는 서버에 있습니다.
+- **사설망으로 연결하세요.** Cage 안에서 Tailscale에 로그인해 호스트와 환경 사이에 양방향 SSH 연결을 사용하세요. [Tailscale / SSH](docs/guide/tailscale.md)
 
 ## 빠른 시작
 
@@ -57,17 +59,19 @@ Claude 防封는 Linux 터미널, 브라우저 및 파일 편집기를 단일 �
 
 ## 다운로드 및 설치
 
-Cage는 macOS, Windows, Linux를 지원합니다. 대상은 macOS 14+의 Apple Silicon Mac, Windows 10 22H2 / 11 x64, Debian 12 / Ubuntu 24.04 x86_64입니다. Windows와 Linux는 개발 검증 중입니다. 설치 패키지 제공 여부, 서명 및 실제 검증 범위는 릴리스 노트를 확인하세요. Intel Mac, Windows ARM64, Linux ARM64는 아직 지원하지 않습니다. [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
+Cage는 macOS, Windows, Linux를 지원합니다. 대상은 macOS 14+의 Apple Silicon Mac, Windows 10 22H2 / 11 x64, Debian 12 / Ubuntu 22.04 / 24.04 x86_64. Intel Mac, Windows ARM64, Linux ARM64는 아직 지원하지 않습니다. [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
 
 1. 앱 다운로드: [macOS / Windows / Linux](https://github.com/tan396222-prog/Claude-AntiBan/releases).
 2. macOS: 설치 패키지를 열고 드래그하세요. **Cage** 으로 **응용**; 그런 다음 응용 프로그램에서 실행하십시오. Windows: [설치 안내](docs/windows.md#安装并开始工作) · Linux: [설치 안내](docs/linux.md#安装并开始工作).
 3. 앱 내 지침에 따라 자신의 네트워크 프록시를 구성하고, 환경을 시작하고, 프로젝트를 엽니다.
 
-설치 프로그램에는 워크벤치와 네트워크 프록시 코어가 포함되어 있습니다. 일상적인 사용에는 Go, Node.js, Docker 또는 Clash를 설치할 필요가 없습니다. 처음 실행 시에는 Linux 이미지와 개발 도구를 다운로드하기 위해 인터넷 연결이 필요합니다. Cage는 네트워크 프록시 서비스나 Claude 계정을 제공하지 않습니다.
+설치 패키지에는 작업 공간과 프록시 엔진이 포함됩니다. Go, Node.js, Docker, Clash를 미리 설치할 필요가 없습니다. 환경을 만들 때 게스트 시스템과 저장 위치를 선택하고 공식 이미지와 개발 도구를 준비하세요. Cage는 운영체제 라이선스, 프록시 서비스나 Claude 계정을 제공하지 않습니다.
 
-공개 버전은 [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases)를 확인하세요. 소스 코드, 웹사이트, 릴리스는 공개되어 있습니다. 설치 프로그램 서명, Apple 공증 및 검증 범위에 대해서는 각 릴리스의 노트를 참조하세요. 클린 머신 설치, macOS 14를 실행하는 실제 Mac에서의 호환성, 실제 Claude 계정 인증 및 모델 요청에는 여전히 완전한 검증이 필요합니다.
+소스 코드와 설치 패키지는 공개되어 있습니다. 버전 안내와 체크섬은 [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases)에서 확인하세요.
 
-macOS 및 Windows 인앱 업데이트는 선택한 프록시로 다운로드하며 직접 연결로 전환하지 않습니다. 설치 전에 작업을 저장하고 중지하세요. macOS는 동일 게시자의 Developer ID 서명과 Apple 검증이 필요하며, Windows는 신뢰할 수 있는 Authenticode 서명과 동일 게시자 공개 키가 필요합니다. 서명 없는 Windows 미리 보기와 Linux 패키지는 수동으로 업데이트합니다. [업데이트 및 제거](docs/getting-started.md#升级与卸载).
+기능은 사용 중인 빌드에 따라 다르며, 공개 설치 파일의 기능과 검증 범위는 릴리스 설명을 기준으로 합니다.
+
+macOS와 서명된 Windows 버전은 선택한 프록시를 통해 업데이트합니다. 서명되지 않은 Windows 미리 보기와 Linux는 설치 파일로 수동 업데이트합니다. 먼저 작업을 저장하고 중지하세요. 개인 데이터는 유지됩니다. [업데이트 및 제거](docs/guide/maintenance.md)
 
 ## 3단계로 시작하세요
 
@@ -77,7 +81,7 @@ macOS 및 Windows 인앱 업데이트는 선택한 프록시로 다운로드하�
 
 ### 2. 환경 시작
 
-워크벤치로 돌아가서 'Cage 환경 시작'을 클릭하세요. 호스트의 Git 설정에 보안 보호가 필요한 경우 애플리케이션은 먼저 그 효과를 설명합니다. '보호 활성화 및 계속'을 클릭하여 적용하세요. 일반 프로젝트에 대한 커밋 및 끌어오기는 영향을 받지 않습니다. 그런 다음 Cage는 이미지를 다운로드하고 도구를 설치하며 네트워크 검사를 실행합니다. '작업 세부정보'에서 진행 상황을 확인하세요. 환경이 준비되고 중요한 점검을 통과하면 온라인으로 작업할 수 있습니다. 확인에 실패하면 지침에 따라 문제를 해결하고 다시 시도하세요.
+처음 만들 때 게스트 시스템 또는 호스트 시스템 복제와 저장 위치를 선택하세요. Cage 환경을 시작하고 설치와 권한 안내를 따르세요. 작업 상세에서 진행 상태와 오류를 볼 수 있습니다. 이후에는 같은 환경을 다시 사용합니다.
 
 ### 3. 프로젝트를 열고 Claude를 실행하세요.
 
@@ -85,12 +89,12 @@ macOS 및 Windows 인앱 업데이트는 선택한 프록시로 다운로드하�
 
 ## 사용하기 전에 이러한 제한 사항을 이해하십시오.
 
-- 공유 프로젝트의 편집 및 삭제는 컴퓨터의 파일에 직접적인 영향을 미칩니다. 버전 제어 또는 백업을 사용하십시오. `.git` 기타 메타데이터는 기본적으로 읽기 전용입니다. 컴퓨터에서 Git 커밋을 수행합니다.
-- 모든 프로젝트는 도구, 계정 및 Linux 파일 시스템을 포함하여 하나의 Cage 환경을 공유합니다. 프로젝트는 서로 격리되지 않습니다.
-- 게스트는 현재 네트워크 프록시를 통해 공용 IPv4 TCP에 액세스할 수 있으며, DNS는 동일한 프록시를 통해 전송됩니다. 호스트 또는 로컬 네트워크에 대한 공용 UDP, IPv6, ICMP 및 게스트 시작 연결이 차단됩니다. 이러한 기능에 의존하는 도구는 작동하지 않을 수 있습니다.
+- 공유 프로젝트의 편집 및 삭제는 컴퓨터의 파일에 직접적인 영향을 미칩니다. 버전 제어 또는 백업을 사용하십시오. 프로젝트의 `.git`은 읽기와 쓰기가 가능하며 Cage에서 변경 사항을 스테이징하고 커밋하거나 브랜치를 전환할 수 있습니다.
+- 모든 프로젝트는 도구, 계정 및 macOS / Windows / Debian / Ubuntu 22.04 파일 시스템을 포함하여 하나의 Cage 환경을 공유합니다. 프로젝트는 서로 격리되지 않습니다.
+- 기본 인터넷 아웃바운드는 IPv4 TCP를 지원하며 DNS는 같은 프록시를 사용합니다. 인터넷 UDP, IPv6, ICMP와 호스트·LAN 직접 연결은 제한됩니다. Tailscale을 직접 활성화하면 사설망 권한에 따라 기기에 연결할 수 있습니다.
 - 네트워크 검사에는 현재 구성과 샘플링된 증거가 표시됩니다. 계정이 플랫폼 제한을 피할 것이라고 보장할 수 없으며 완전한 가상화 보안 감사를 대체하지 않습니다.
 
-자세한 내용은 다음을 참조하세요. [네트워크 및 데이터 경계](docs/getting-started.md#网络与数据边界), [네트워크 검사 디자인](docs/design/network-checks.md) 그리고 [내장형 네트워크 프록시 설계](docs/design/managed-proxy.md).
+자세한 내용은 다음을 참조하세요. [네트워크 및 데이터 경계](docs/getting-started.md#网络与数据边界).
 
 ## 문서화 및 기여
 
@@ -98,18 +102,21 @@ macOS 및 Windows 인앱 업데이트는 선택한 프록시로 다운로드하�
 
 | 귀하의 작업 | 여기서 시작하세요 |
 |---|---|
+| macOS / Windows / Debian / Ubuntu 22.04 | [게스트 시스템 선택](docs/guide/guest-systems.md) |
 | 네트워크 프록시 설치, 구성 및 첫 번째 프로젝트 열기 | [시작하기](docs/getting-started.md) |
 | 다운로드, 시작, 연결 및 로그인 문제 해결 | [FAQ 및 복구](docs/troubleshooting.md) |
 | 키보드 컨트롤, 모양, 데이터 지속성 및 종료 동작 알아보기 | [매일 사용](docs/getting-started.md#日常使用) |
-| 소스에서 빌드하거나 개선에 기여 | [투고 가이드](CONTRIBUTING.md) |
-| 모듈 책임 및 네트워크 제약 사항 이해 | [작업대 디자인](docs/design/workbench.md) |
 | 재현 가능한 문제 보고 | [GitHub Issues](https://github.com/tan396222-prog/Claude-AntiBan/issues) |
+
+이 프로젝트는 빠르게 발전하고 있습니다. 피드백을 공유하려면 커뮤니티 그룹에 가입하세요. 커뮤니티 관리자를 환영합니다.
 
 ## 원산지 및 라이선스
 
-케이지는 다음에서 파생됩니다. [agent-vm](https://github.com/sylvinus/agent-vm) ; 업스트림 기준선은 다음과 같습니다. `652688aae92c35ce536b9be52262e1cc5ec6e03a`.
+케이지는 다음에서 파생됩니다. [agent-vm](https://github.com/sylvinus/agent-vm).
 
-프로젝트의 기본 라이센스는 다음과 같습니다. [MIT](LICENSE). 번들 구성 요소는 해당 라이센스를 유지합니다. Mihomo는 GPL-3.0에 따라 별도의 실행 파일로 배포됩니다. 또한 참조하십시오 [NOTICE](NOTICE), [타사 라이선스](THIRD_PARTY_LICENSES), [제3자 소스](third_party/SOURCES) 그리고 [noVNC 출처](ui/vendor/novnc/README.cage.md). 업스트림 프로젝트의 설명은 [업스트림 읽어보기](docs/agent-vm-upstream.md).
+프로젝트의 기본 라이센스는 다음과 같습니다. [MIT](LICENSE). 번들 구성 요소는 해당 라이센스를 유지합니다. Mihomo는 GPL-3.0에 따라 별도의 실행 파일로 배포됩니다. 또한 참조하십시오 [NOTICE](NOTICE) · [타사 라이선스](THIRD_PARTY_LICENSES) · [noVNC](ui/vendor/novnc/LICENSE.txt)。
+
+Cage는 독립적인 커뮤니티 프로젝트이며 Anthropic과 관련이 없습니다.
 
 ## 참고자료 및 감사의 말
 
@@ -124,3 +131,4 @@ macOS 및 Windows 인앱 업데이트는 선택한 프록시로 다운로드하�
 - [code-server](https://github.com/coder/code-server): 브라우저 기반 코드 편집기입니다.
 - [AIO Sandbox](https://github.com/agent-infra/sandbox): 작업 환경 및 인터랙션 디자인에 대한 참고 자료입니다.
 - [claude-switcher](https://github.com/YOURSJEYO/claude-switcher) 그리고 [Claude-Guardian](https://github.com/DUNHKpcc/Claude-Guardian): 네트워크 점검 및 보안 진단을 위한 참고 자료입니다.
+

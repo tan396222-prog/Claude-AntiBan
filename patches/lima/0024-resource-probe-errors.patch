@@ -1,0 +1,159 @@
+Subject: [PATCH] Retain bounded resource probe errors for embedding diagnostics
+
+diff --git a/pkg/hostagent/resources.go b/pkg/hostagent/resources.go
+--- a/pkg/hostagent/resources.go
++++ b/pkg/hostagent/resources.go
+@@ -6,6 +6,7 @@
+ import (
+ 	"context"
+ 	"errors"
++	"fmt"
+ 	"io"
+ 	"os/exec"
+ 	"runtime"
+@@ -35,25 +36,48 @@
+ 		return func() {}
+ 	}
+ 	read := func(ctx context.Context, script string) ([]byte, error) {
+-		cmd := a.resourceProbeCommand(ctx, script)
+-		pipe, err := cmd.StdoutPipe()
+-		if err != nil {
+-			return nil, err
+-		}
+-		if err = cmd.Start(); err != nil {
+-			return nil, err
+-		}
+-		out, readErr := io.ReadAll(io.LimitReader(pipe, 16385))
+-		if readErr != nil || len(out) > 16384 {
+-			_ = cmd.Process.Kill()
+-			_ = cmd.Wait()
+-			return nil, errors.New("resource observation exceeded its limit")
+-		}
+-		return out, cmd.Wait()
++		return runResourceProbe(ctx, a.resourceProbeCommand(ctx, script))
+ 	}
+ 	stop := ManageResources(ctx, a.instDir, a.instConfig, balloon, read)
+ 	var once sync.Once
+ 	return func() { once.Do(stop) }
++}
++
++// Retain a bounded prefix while draining all stderr, so a noisy SSH process
++// cannot block. The embedding application's diagnostic store redacts the error.
++type resourceProbeStderr struct{ data []byte }
++
++func (b *resourceProbeStderr) Write(p []byte) (int, error) {
++	n := len(p)
++	if remaining := 4096 - len(b.data); remaining > 0 {
++		b.data = append(b.data, p[:min(remaining, n)]...)
++	}
++	return n, nil
++}
++
++func runResourceProbe(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
++	var stderr resourceProbeStderr
++	cmd.Stderr = &stderr
++	pipe, err := cmd.StdoutPipe()
++	if err != nil {
++		return nil, fmt.Errorf("resource probe stdout: %w", err)
++	}
++	if err = cmd.Start(); err != nil {
++		return nil, fmt.Errorf("resource probe start: %w", err)
++	}
++	out, readErr := io.ReadAll(io.LimitReader(pipe, 16385))
++	if readErr != nil || len(out) > 16384 {
++		_ = cmd.Process.Kill()
++		_ = cmd.Wait()
++		if len(out) > 16384 {
++			return nil, errors.New("resource observation exceeded its limit")
++		}
++		return nil, fmt.Errorf("resource probe read: %w; stderr=%s", errors.Join(ctx.Err(), readErr), stderr.data)
++	}
++	if err = cmd.Wait(); err != nil {
++		return nil, fmt.Errorf("resource probe execution: %w; stderr=%s", errors.Join(ctx.Err(), err), stderr.data)
++	}
++	return out, nil
+ }
+ 
+ func (a *HostAgent) resourceProbeCommand(ctx context.Context, script string) *exec.Cmd {
+diff --git a/pkg/hostagent/resources_process_test.go b/pkg/hostagent/resources_process_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/hostagent/resources_process_test.go
+@@ -0,0 +1,77 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package hostagent
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestResourceProbeProcess(t *testing.T) {
++	if mode := os.Getenv("CAGE_RESOURCE_PROBE_TEST"); mode != "" {
++		switch mode {
++		case "failure":
++			fmt.Fprint(os.Stdout, "private-stdout")
++			fmt.Fprint(os.Stderr, "getsockname failed: Not a socket\n"+strings.Repeat("x", 1<<20))
++			os.Exit(7)
++		case "timeout":
++			time.Sleep(30 * time.Second)
++		case "oversize":
++			fmt.Fprint(os.Stdout, strings.Repeat("x", 16385))
++		case "success":
++			fmt.Fprint(os.Stdout, "metrics")
++		}
++		os.Exit(0)
++	}
++	exe, err := os.Executable()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, mode := range []string{"failure", "timeout", "oversize", "success", "start"} {
++		t.Run(mode, func(t *testing.T) {
++			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
++			defer cancel()
++			if mode == "timeout" {
++				ctx, cancel = context.WithTimeout(ctx, 100*time.Millisecond)
++				defer cancel()
++			}
++			cmd := exec.CommandContext(ctx, exe, "-test.run=^TestResourceProbeProcess$")
++			cmd.Env = append(os.Environ(), "CAGE_RESOURCE_PROBE_TEST="+mode)
++			cmd.WaitDelay = time.Second
++			hideResourceProbe(cmd)
++			if mode == "start" {
++				cmd.Path = "missing-resource-probe-executable"
++			}
++			out, err := runResourceProbe(ctx, cmd)
++			switch mode {
++			case "success":
++				if err != nil || string(out) != "metrics" {
++					t.Fatalf("valid observation lost: %q %v", out, err)
++				}
++			case "failure":
++				if err == nil || !strings.Contains(err.Error(), "Not a socket") || !strings.Contains(err.Error(), "exit status 7") || len(err.Error()) > 4300 || strings.Contains(err.Error(), "private-stdout") {
++					t.Fatalf("missing or unbounded execution diagnostic: %v", err)
++				}
++			case "timeout":
++				if !errors.Is(err, context.DeadlineExceeded) {
++					t.Fatalf("timeout cause lost: %v", err)
++				}
++			case "oversize":
++				if err == nil || !strings.Contains(err.Error(), "exceeded") {
++					t.Fatalf("oversized stdout accepted: %v", err)
++				}
++			case "start":
++				if err == nil || !strings.Contains(err.Error(), "probe start") {
++					t.Fatalf("start failure lost: %v", err)
++				}
++			}
++		})
++	}
++}

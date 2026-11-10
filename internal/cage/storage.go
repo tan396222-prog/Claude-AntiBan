@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sylvinus/agent-vm/internal/host"
 	"github.com/sylvinus/agent-vm/internal/paths"
@@ -39,6 +40,8 @@ type storageMove struct {
 	// Previous anchor is retained when the old storage is a directory.
 	// If it was a link, only the link is discarded after commit.
 	PreviousCustom bool
+	Runtime        string            `json:",omitempty"`
+	Transition     StorageTransition `json:",omitempty"`
 }
 
 func readStorageRecord(profile string) (storageRecord, error) {
@@ -121,7 +124,7 @@ func StoragePathsOverlap(a, b string) bool {
 	return StorageContains(a, b) || StorageContains(b, a)
 }
 
-// Upgrades replace the entire application folder including its resources.
+// Resolve the application folder, including macOS bundles and Windows resources.
 func runningApplicationDir() (string, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -228,6 +231,11 @@ func getStorageLocation(profile string) (StorageLocation, error) {
 			break
 		}
 	}
+	if _, err := os.Stat(filepath.Join(profile, "windows-guest.json")); err == nil {
+		loc.HasEnvironment = true
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return loc, err
+	}
 	return loc, nil
 }
 
@@ -256,6 +264,10 @@ func AcquireStorageUse(profile string) (*os.File, StorageLocation, error) {
 }
 
 func openStorageLock(profile string, exclusive bool) (*os.File, error) {
+	return openStorageLockWithRuntime(context.Background(), profile, exclusive, nil)
+}
+
+func openStorageLockWithRuntime(ctx context.Context, profile string, exclusive bool, runtime StorageRuntime) (*os.File, error) {
 	f, err := os.OpenFile(filepath.Join(profile, "environment-storage.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err
@@ -279,14 +291,14 @@ func openStorageLock(profile string, exclusive bool) (*os.File, error) {
 		f.Close()
 		// Acquire exclusively before attempting recovery, then reacquire a
 		// shared lease. Recheck the journal once more under the new lease.
-		w, err := openStorageLock(profile, true)
+		w, err := openStorageLockWithRuntime(ctx, profile, true, runtime)
 		if err != nil {
 			return nil, err
 		}
 		w.Close()
-		return openStorageLock(profile, false)
+		return openStorageLockWithRuntime(ctx, profile, false, runtime)
 	}
-	if err = recoverStorage(profile); err != nil {
+	if err = recoverStorageWithRuntime(ctx, profile, runtime); err != nil {
 		f.Close()
 		return nil, err
 	}
@@ -294,6 +306,14 @@ func openStorageLock(profile string, exclusive bool) (*os.File, error) {
 }
 
 func ValidateStorageTarget(profile, directory string) error {
+	app, err := runningApplicationDir()
+	if err != nil {
+		return err
+	}
+	return validateStorageTarget(profile, directory, app, runtime.GOOS)
+}
+
+func validateStorageTarget(profile, directory, app, platform string) error {
 	if _, err := os.Readlink(storageAnchor(profile)); err == nil {
 		r, err := readStorageRecord(profile)
 		if err != nil {
@@ -338,11 +358,12 @@ func ValidateStorageTarget(profile, directory string) error {
 		return err
 	}
 	private = append(private, profile, EnvironmentDir(profile))
-	app, err := runningApplicationDir()
-	if err != nil {
-		return err
+	appData := windowsApplicationDataDirectory(app, platform)
+	// Windows reserves this one data folder beside its program files. The
+	// installer preserves it by file ownership during update and uninstall.
+	if appData == "" || !sameStoragePath(directory, appData) {
+		private = append(private, app)
 	}
-	private = append(private, app)
 	for _, p := range private {
 		real, e := StoragePhysicalPath(p)
 		if e != nil && !errors.Is(e, os.ErrNotExist) {
@@ -398,17 +419,18 @@ func stoppedStorage(source string) error {
 				return err
 			}
 			var pid int
+			started := ""
 			if name == "cage-running.json" {
 				var record runningProfile
 				err = json.Unmarshal(data, &record)
-				pid = record.PID
+				pid, started = record.PID, record.Started
 			} else {
 				pid, err = strconv.Atoi(strings.TrimSpace(string(data)))
 			}
 			if err != nil || pid < 1 {
 				return fmt.Errorf("无法核验虚拟机进程记录 %s", name)
 			}
-			if profileProcessAlive(pid) {
+			if profileProcessAlive(pid) && ProcessStartMatches(pid, started) {
 				return fmt.Errorf("请先停止虚拟机 %s，再迁移环境", inst.Name())
 			}
 		}
@@ -417,11 +439,20 @@ func stoppedStorage(source string) error {
 }
 
 func MoveStorage(ctx context.Context, profile, directory string, expected StorageLocation, report func(copied, total int64)) (loc StorageLocation, err error) {
-	lock, err := openStorageLock(profile, true)
+	return MoveStorageWithRuntime(ctx, profile, directory, expected, nil, report)
+}
+
+func MoveStorageWithRuntime(ctx context.Context, profile, directory string, expected StorageLocation, runtime StorageRuntime, report func(copied, total int64)) (loc StorageLocation, err error) {
+	lock, err := openStorageLockWithRuntime(ctx, profile, true, runtime)
 	if err != nil {
 		return loc, err
 	}
 	defer lock.Close()
+	if _, bindingErr := os.Stat(filepath.Join(profile, "windows-guest.json")); bindingErr == nil && runtime == nil {
+		return loc, errors.New("Windows 客机迁移需要同步更新系统管理助手的磁盘绑定")
+	} else if bindingErr != nil && !errors.Is(bindingErr, os.ErrNotExist) {
+		return loc, bindingErr
+	}
 	loc, err = getStorageLocation(profile)
 	if err != nil {
 		return loc, err
@@ -465,6 +496,35 @@ func MoveStorage(ctx context.Context, profile, directory string, expected Storag
 		next.Backups = append(next.Backups, backup)
 	}
 	move := storageMove{Next: next, PreviousCustom: loc.Custom}
+	var excluded []string
+	if runtime != nil {
+		snapshot, snapshotErr := runtime.Snapshot(ctx, src)
+		if snapshotErr != nil {
+			return loc, snapshotErr
+		}
+		backup := anchorBackup
+		if loc.Custom {
+			backup = src
+		}
+		move.Runtime = runtime.Name()
+		move.Transition = StorageTransition{ID: id, Source: src, Destination: filepath.Join(directory, "state"), Backup: backup, State: snapshot.State}
+		if move.Runtime == "" || !json.Valid(snapshot.State) {
+			return loc, errors.New("客机存储事务缺少有效的恢复信息")
+		}
+		for _, retained := range snapshot.Backups {
+			if !filepath.IsAbs(retained) || StoragePathsOverlap(retained, directory) {
+				return loc, errors.New("客机备份路径与迁移目标冲突")
+			}
+			move.Next.Backups = append(move.Next.Backups, retained)
+		}
+		next = move.Next
+		for _, path := range snapshot.Excluded {
+			if !filepath.IsAbs(path) || sameStoragePath(path, src) || !StorageContains(src, path) {
+				return loc, errors.New("客机管理文件超出当前存储目录")
+			}
+		}
+		excluded = snapshot.Excluded
+	}
 	if err = host.EnsurePrivateDir(directory); err != nil {
 		if errors.Is(err, os.ErrPermission) {
 			return loc, fmt.Errorf("无法将目标目录设为仅当前用户可访问。请选择自己新建且可以修改权限的空文件夹：%w", err)
@@ -480,7 +540,10 @@ func MoveStorage(ctx context.Context, profile, directory string, expected Storag
 	// Recovery only removes files under the newly claimed target with a
 	// matching random identity. It never recursively removes an old copy.
 	defer func() {
-		if recErr := recoverStorage(profile); recErr != nil {
+		// A cancelled copy still needs bounded time to restore its VM binding.
+		recovery, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Minute)
+		defer cancel()
+		if recErr := recoverStorageWithRuntime(recovery, profile, runtime); recErr != nil {
 			err = errors.Join(err, fmt.Errorf("恢复迁移：%w", recErr))
 		}
 	}()
@@ -497,8 +560,13 @@ func MoveStorage(ctx context.Context, profile, directory string, expected Storag
 		_ = os.Remove(destState)
 		return loc, err
 	}
+	if runtime != nil {
+		if err = runtime.Begin(ctx, move.Transition); err != nil {
+			return loc, err
+		}
+	}
 	if info != nil {
-		if err = copyStorage(ctx, src, destState, report); err != nil {
+		if err = copyStorageExcluding(ctx, src, destState, excluded, report); err != nil {
 			return loc, err
 		}
 	}
@@ -508,6 +576,14 @@ func MoveStorage(ctx context.Context, profile, directory string, expected Storag
 	}
 	if err = syncStorageDir(directory); err != nil {
 		return loc, err
+	}
+	if err = ctx.Err(); err != nil {
+		return loc, err
+	}
+	if runtime != nil {
+		if err = runtime.Switch(ctx, move.Transition); err != nil {
+			return loc, err
+		}
 	}
 	if err = ctx.Err(); err != nil {
 		return loc, err
@@ -539,6 +615,10 @@ func claimStorageTarget(dir, id string) error {
 }
 
 func recoverStorage(profile string) error {
+	return recoverStorageWithRuntime(context.Background(), profile, nil)
+}
+
+func recoverStorageWithRuntime(ctx context.Context, profile string, runtime StorageRuntime) error {
 	journal := filepath.Join(profile, pendingFile)
 	b, err := os.ReadFile(journal)
 	if err != nil {
@@ -552,6 +632,12 @@ func recoverStorage(profile string) error {
 	if !validStorageID(next.ID) || !filepath.IsAbs(next.Directory) {
 		return errors.New("存储迁移记录损坏")
 	}
+	if p.Runtime != "" && (runtime == nil || runtime.Name() != p.Runtime) {
+		return ErrStorageRuntimeRecovery
+	}
+	if p.Runtime != "" && (p.Transition.ID != next.ID || !sameStoragePath(p.Transition.Destination, filepath.Join(next.Directory, "state")) || !filepath.IsAbs(p.Transition.Source) || !filepath.IsAbs(p.Transition.Backup) || !json.Valid(p.Transition.State)) {
+		return errors.New("客机存储恢复记录损坏")
+	}
 	r, err := readStorageRecord(profile)
 	if err != nil {
 		return err
@@ -561,6 +647,11 @@ func recoverStorage(profile string) error {
 	anchor := storageAnchor(profile)
 	dest := filepath.Join(next.Directory, "state")
 	if r.ID == next.ID {
+		if p.Runtime != "" {
+			if err = runtime.Recover(ctx, p.Transition, true); err != nil {
+				return err
+			}
+		}
 		if token, e := os.ReadFile(filepath.Join(dest, storageMarker)); e == nil && string(token) == next.ID {
 			if err = os.Remove(filepath.Join(dest, storageMarker)); err != nil {
 				return err
@@ -586,6 +677,11 @@ func recoverStorage(profile string) error {
 			}
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return e
+		}
+		if p.Runtime != "" {
+			if err = runtime.Recover(ctx, p.Transition, false); err != nil {
+				return err
+			}
 		}
 		// Disconnected destination disks never prevent resuming the old copy.
 		marker := filepath.Join(next.Directory, storageMarker)

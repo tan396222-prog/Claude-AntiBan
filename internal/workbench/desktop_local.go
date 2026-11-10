@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/sylvinus/agent-vm/internal/containerenv"
-	"github.com/sylvinus/agent-vm/internal/host"
 	"github.com/sylvinus/agent-vm/internal/managedproxy"
 	"github.com/sylvinus/agent-vm/internal/remotehost"
 )
@@ -30,22 +29,6 @@ func NewDesktopLocalController(configPath, fullExecutable string) DesktopLocalCo
 func (d *desktopLocal) available() bool {
 	info, err := os.Stat(d.executable)
 	return filepath.IsAbs(d.executable) && err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode()&0111 != 0)
-}
-
-func (d *desktopLocal) controllerLockFree() bool {
-	path := filepath.Join(d.profile, "control.lock")
-	if err := host.CheckPrivateFile(path); err != nil {
-		return os.IsNotExist(err)
-	}
-	f, err := os.OpenFile(path, os.O_RDWR, 0)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	if lockController(f) != nil {
-		return false
-	}
-	return unlockController(f) == nil
 }
 
 func (c *controllerClient) localControl(ctx context.Context, action string, input desktopLocalRequest) (desktopLocalReply, error) {
@@ -76,7 +59,12 @@ func (c *controllerClient) localControl(ctx context.Context, action string, inpu
 // or proxy without a reachable controller is unknown, never a released state.
 func (d *desktopLocal) offlineStatus(ctx context.Context, available bool) DesktopLocalStatus {
 	st := DesktopLocalStatus{Available: available, Message: "本机状态待确认，请返回本机检查已有后台"}
-	if !d.controllerLockFree() {
+	free, err := controllerLockStatus(d.profile)
+	if err != nil {
+		st.Message = "无法检查本机控制锁或修复旧版权限，请检查配置目录的访问权限：" + err.Error()
+		return st
+	}
+	if !free {
 		st.ServiceRunning = true
 		return st
 	}
@@ -99,6 +87,10 @@ func (d *desktopLocal) offlineStatus(ctx context.Context, available bool) Deskto
 
 func (d *desktopLocal) Status(ctx context.Context) (DesktopLocalStatus, error) {
 	available := d.available()
+	free, lockErr := controllerLockStatus(d.profile)
+	if free || lockErr != nil {
+		return d.offlineStatus(ctx, available), nil
+	}
 	c, err := openController(d.profile)
 	if errors.Is(err, errControllerUnavailable) {
 		return d.offlineStatus(ctx, available), nil
@@ -127,6 +119,21 @@ func (d *desktopLocal) Connect(ctx context.Context) (_ *remotehost.Session, retu
 		return nil, errors.New("此安装缺少本机运行组件")
 	}
 	if !st.Known && st.ServiceRunning && st.ControllerID == "" {
+		wait, cancel := context.WithTimeout(ctx, 12*time.Second)
+		c, waitErr := waitControllerReady(wait, d.profile)
+		cancel()
+		if c != nil {
+			c.close()
+		}
+		if waitErr != nil && !errors.Is(waitErr, errControllerUnavailable) {
+			return nil, waitErr
+		}
+		st, err = d.Status(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if !st.Known && st.ServiceRunning && st.ControllerID == "" {
 		handed, err := d.handoffOldLocal(ctx)
 		if err != nil {
 			return nil, err
@@ -139,15 +146,9 @@ func (d *desktopLocal) Connect(ctx context.Context) (_ *remotehost.Session, retu
 		}
 	}
 	// Explicit local selection may reattach an orphan workload to its owner.
-	// Untrusted records or a live lock with no reachable service cannot be taken over.
-	if !st.Known && !st.ServiceRunning {
-		c, recordErr := openController(d.profile)
-		if c != nil {
-			c.close()
-		}
-		if (recordErr != nil && !errors.Is(recordErr, errControllerUnavailable)) || !d.controllerLockFree() {
-			return nil, errors.New(st.Message)
-		}
+	// A live or inaccessible lock with no reachable service cannot be taken over.
+	if !st.Known && !st.ServiceRunning && !controllerLockFree(d.profile) {
+		return nil, errors.New(st.Message)
 	}
 	if err = ctx.Err(); err != nil {
 		return nil, err
@@ -191,7 +192,7 @@ func (d *desktopLocal) Connect(ctx context.Context) (_ *remotehost.Session, retu
 			if launchID == "" {
 				return nil, probeErr
 			}
-		} else if !errors.Is(err, errControllerUnavailable) {
+		} else if launchID == "" && !errors.Is(err, errControllerUnavailable) {
 			return nil, err
 		}
 		select {
@@ -373,7 +374,7 @@ func (d *desktopLocal) Release(ctx context.Context, expected DesktopLocalStatus,
 	}
 	// Unlike a cold selector probe, this explicit release may query an existing
 	// local container engine to verify that its workload actually stopped.
-	if _, err := os.Lstat(filepath.Join(d.profile, "control.json")); !os.IsNotExist(err) || !d.controllerLockFree() {
+	if _, err := os.Lstat(filepath.Join(d.profile, "control.json")); !os.IsNotExist(err) || !controllerLockFree(d.profile) {
 		return errors.New("本机控制服务状态已变化，请重新确认")
 	}
 	if running, err := controllerVMState(d.profile); err != nil || running || managedproxy.ConfirmStopped(ctx, d.profile) != nil {

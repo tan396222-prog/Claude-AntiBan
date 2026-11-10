@@ -1,0 +1,322 @@
+--- a/accel/stubs/whpx-stub.c
++++ b/accel/stubs/whpx-stub.c
+@@ -11,3 +11,8 @@
+ 
+ bool whpx_allowed;
+ bool whpx_irqchip_in_kernel;
++
++int whpx_balloon_mapping(bool add, void *host, uint64_t guest, size_t size)
++{
++    return -ENOSYS;
++}
+--- a/accel/whpx/whpx-common.c
++++ b/accel/whpx/whpx-common.c
+@@ -284,6 +284,25 @@
+  * Memory support.
+  */
+ 
++int whpx_balloon_mapping(bool add, void *host, uint64_t guest, size_t size)
++{
++    HRESULT hr;
++
++    if (add) {
++        hr = whp_dispatch.WHvMapGpaRange(whpx_global.partition, host, guest, size,
++                WHvMapGpaRangeFlagRead | WHvMapGpaRangeFlagWrite |
++                WHvMapGpaRangeFlagExecute);
++    } else {
++        hr = whp_dispatch.WHvUnmapGpaRange(whpx_global.partition, guest, size);
++    }
++    if (FAILED(hr)) {
++        error_report_once("WHPX balloon %s failed (0x%08lx)",
++                          add ? "map" : "unmap", (unsigned long)hr);
++        return -EIO;
++    }
++    return 0;
++}
++
+ static void whpx_set_phys_mem(MemoryRegionSection *section, bool add)
+ {
+     struct whpx_state *whpx = &whpx_global;
+--- a/hw/virtio/virtio-balloon.c
++++ b/hw/virtio/virtio-balloon.c
+@@ -18,6 +18,8 @@
+ #include "qemu/module.h"
+ #include "qemu/timer.h"
+ #include "qemu/madvise.h"
++#include "qemu/main-loop.h"
++#include "system/whpx.h"
+ #include "hw/virtio/virtio.h"
+ #include "hw/mem/pc-dimm.h"
+ #include "hw/core/qdev-properties.h"
+@@ -76,9 +78,114 @@
+             migration_in_bg_snapshot();
+ }
+ 
++typedef struct BalloonDiscardBatch BalloonDiscardBatch;
++
++#ifdef _WIN32
++typedef struct BalloonDiscardRange {
++    RAMBlock *rb;
++    MemoryRegion *mr;
++    ram_addr_t offset;
++    hwaddr guest;
++    size_t size;
++} BalloonDiscardRange;
++
++struct BalloonDiscardBatch {
++    BalloonDiscardRange ranges[256];
++    size_t count;
++};
++
++static void balloon_windows_discard(RAMBlock *rb, ram_addr_t offset,
++                                    hwaddr guest, size_t size)
++{
++    void *addr = qemu_ram_get_host_addr(rb) + offset;
++
++    /* WHPX must release its backing before Windows can reclaim these pages. */
++    if (whpx_enabled() && whpx_balloon_mapping(false, addr, guest, size) < 0) {
++        return;
++    }
++    if (!VirtualFree(addr, size, MEM_DECOMMIT)) {
++        error_report_once("Could not decommit Windows balloon pages (error %lu)",
++                          (unsigned long)GetLastError());
++    } else if (!VirtualAlloc(addr, size, MEM_COMMIT, PAGE_READWRITE)) {
++        /* RAMBlock users require accessible host addresses even while the guest
++         * lends these pages to the balloon. Windows allocates backing on touch. */
++        error_report("Could not recommit Windows balloon pages (error %lu)",
++                     (unsigned long)GetLastError());
++        exit(1);
++    }
++    if (whpx_enabled() && whpx_balloon_mapping(true, addr, guest, size) < 0) {
++        /* Resume only after the guest can access the recommitted range. */
++        exit(1);
++    }
++}
++
++static int balloon_discard_range_compare(const void *left, const void *right)
++{
++    const BalloonDiscardRange *a = left;
++    const BalloonDiscardRange *b = right;
++
++    if (a->rb != b->rb) {
++        return (uintptr_t)a->rb < (uintptr_t)b->rb ? -1 : 1;
++    }
++    return (a->offset > b->offset) - (a->offset < b->offset);
++}
++
++static void balloon_discard_batch_flush(BalloonDiscardBatch *batch)
++{
++    size_t i = 0;
++
++    qsort(batch->ranges, batch->count, sizeof(batch->ranges[0]),
++          balloon_discard_range_compare);
++    while (i < batch->count) {
++        BalloonDiscardRange *first = &batch->ranges[i++];
++        ram_addr_t end = first->offset + first->size;
++
++        while (i < batch->count && batch->ranges[i].rb == first->rb &&
++               batch->ranges[i].offset <= end &&
++               batch->ranges[i].guest == first->guest +
++                   batch->ranges[i].offset - first->offset) {
++            end = MAX(end, batch->ranges[i].offset + batch->ranges[i].size);
++            i++;
++        }
++        balloon_windows_discard(first->rb, first->offset, first->guest,
++                                end - first->offset);
++    }
++    for (i = 0; i < batch->count; i++) {
++        memory_region_unref(batch->ranges[i].mr);
++    }
++    batch->count = 0;
++}
++#endif
++
++/* Balloon and free-page reporting hand over unused guest pages. Their
++ * contents are unspecified when the guest takes them back. */
++static void balloon_discard_range(RAMBlock *rb, ram_addr_t offset, size_t size,
++                                  MemoryRegion *mr, BalloonDiscardBatch *batch,
++                                  hwaddr guest)
++{
++#ifdef _WIN32
++    /* Batch adjacent pages to reduce Windows memory operations. Retain each region
++     * until the batch is complete, before acknowledging the virtqueue entry. */
++    if (batch) {
++        if (batch->count == ARRAY_SIZE(batch->ranges)) {
++            balloon_discard_batch_flush(batch);
++        }
++        memory_region_ref(mr);
++        batch->ranges[batch->count++] = (BalloonDiscardRange) {
++            .rb = rb, .mr = mr, .offset = offset, .guest = guest, .size = size,
++        };
++    } else {
++        balloon_windows_discard(rb, offset, guest, size);
++    }
++#else
++    ram_block_discard_range(rb, offset, size);
++#endif
++}
++
+ static void balloon_inflate_page(VirtIOBalloon *balloon,
+                                  MemoryRegion *mr, hwaddr mr_offset,
+-                                 PartiallyBalloonedPage *pbp)
++                                 PartiallyBalloonedPage *pbp,
++                                 BalloonDiscardBatch *batch, hwaddr guest)
+ {
+     void *addr = memory_region_get_ram_ptr(mr) + mr_offset;
+     ram_addr_t rb_offset, rb_aligned_offset, base_gpa;
+@@ -94,7 +201,7 @@
+     if (rb_page_size == BALLOON_PAGE_SIZE) {
+         /* Easy case */
+ 
+-        ram_block_discard_range(rb, rb_offset, rb_page_size);
++        balloon_discard_range(rb, rb_offset, rb_page_size, mr, batch, guest);
+         /* We ignore errors from ram_block_discard_range(), because it
+          * has already reported them, and failing to discard a balloon
+          * page is not fatal */
+@@ -133,7 +240,8 @@
+         /* We've accumulated a full host page, we can actually discard
+          * it now */
+ 
+-        ram_block_discard_range(rb, rb_aligned_offset, rb_page_size);
++        balloon_discard_range(rb, rb_aligned_offset, rb_page_size, mr, batch,
++                              guest - (rb_offset - rb_aligned_offset));
+         /* We ignore errors from ram_block_discard_range(), because it
+          * has already reported them, and failing to discard a balloon
+          * page is not fatal */
+@@ -144,6 +252,7 @@
+ static void balloon_deflate_page(VirtIOBalloon *balloon,
+                                  MemoryRegion *mr, hwaddr mr_offset)
+ {
++#ifndef _WIN32
+     void *addr = memory_region_get_ram_ptr(mr) + mr_offset;
+     ram_addr_t rb_offset;
+     RAMBlock *rb;
+@@ -166,6 +275,8 @@
+                     strerror(errno));
+         /* Otherwise ignore, failing to page hint shouldn't be fatal */
+     }
++#endif
++    /* Windows recommits and remaps during inflation. Backing is demand-zero. */
+ }
+ 
+ /*
+@@ -389,7 +500,7 @@
+                 continue;
+             }
+ 
+-            ram_block_discard_range(rb, ram_offset, size);
++            balloon_discard_range(rb, ram_offset, size, NULL, NULL, elem->in_addr[i]);
+         }
+ 
+ skip_element:
+@@ -407,6 +518,12 @@
+ 
+     for (;;) {
+         PartiallyBalloonedPage pbp = {};
++#ifdef _WIN32
++        BalloonDiscardBatch batch = {};
++        BalloonDiscardBatch *discard_batch = &batch;
++#else
++        BalloonDiscardBatch *discard_batch = NULL;
++#endif
+         size_t offset = 0;
+         uint32_t pfn;
+ 
+@@ -441,7 +558,9 @@
+             if (!virtio_balloon_inhibited()) {
+                 if (vq == s->ivq) {
+                     balloon_inflate_page(s, section.mr,
+-                                         section.offset_within_region, &pbp);
++                                         section.offset_within_region, &pbp,
++                                         discard_batch,
++                                         section.offset_within_address_space);
+                 } else if (vq == s->dvq) {
+                     balloon_deflate_page(s, section.mr, section.offset_within_region);
+                 } else {
+@@ -451,12 +570,31 @@
+             memory_region_unref(section.mr);
+         }
+ 
++#ifdef _WIN32
++        balloon_discard_batch_flush(&batch);
++#endif
+         virtqueue_push(vq, elem, 0);
+         virtio_notify(vdev, vq);
+         g_free(elem);
+         virtio_balloon_pbp_free(&pbp);
+-    }
+-}
++#ifdef _WIN32
++        /* Let network and control I/O run between memory batches. */
++        if (vq == s->ivq) {
++            qemu_bh_schedule(s->balloon_bh);
++            break;
++        }
++#endif
++    }
++}
++
++#ifdef _WIN32
++static void virtio_balloon_memory_bh(void *opaque)
++{
++    VirtIOBalloon *s = opaque;
++
++    virtio_balloon_handle_output(VIRTIO_DEVICE(s), s->ivq);
++}
++#endif
+ 
+ static void virtio_balloon_receive_stats(VirtIODevice *vdev, VirtQueue *vq)
+ {
+@@ -887,6 +1025,10 @@
+         return;
+     }
+ 
++#ifdef _WIN32
++    s->balloon_bh = qemu_bh_new_guarded(virtio_balloon_memory_bh, s,
++                                      &dev->mem_reentrancy_guard);
++#endif
+     s->ivq = virtio_add_queue(vdev, 128, virtio_balloon_handle_output);
+     s->dvq = virtio_add_queue(vdev, 128, virtio_balloon_handle_output);
+     s->svq = virtio_add_queue(vdev, 128, virtio_balloon_receive_stats);
+@@ -918,6 +1060,9 @@
+     VirtIOBalloon *s = VIRTIO_BALLOON(dev);
+ 
+     qemu_unregister_resettable(OBJECT(dev));
++#ifdef _WIN32
++    qemu_bh_delete(s->balloon_bh);
++#endif
+     if (s->free_page_bh) {
+         qemu_bh_delete(s->free_page_bh);
+         object_unref(OBJECT(s->iothread));
+@@ -942,6 +1087,9 @@
+ static void virtio_balloon_device_reset(VirtIODevice *vdev)
+ {
+     VirtIOBalloon *s = VIRTIO_BALLOON(vdev);
++#ifdef _WIN32
++    qemu_bh_cancel(s->balloon_bh);
++#endif
+ 
+     if (virtio_balloon_free_page_support(s)) {
+         virtio_balloon_free_page_stop(s);
+--- a/include/hw/virtio/virtio-balloon.h
++++ b/include/hw/virtio/virtio-balloon.h
+@@ -54,6 +54,9 @@
+     QEMUTimer *stats_timer;
+     IOThread *iothread;
+     QEMUBH *free_page_bh;
++#ifdef _WIN32
++    QEMUBH *balloon_bh;
++#endif
+     /*
+      * Lock to synchronize threads to access the free page reporting related
+      * fields (e.g. free_page_hint_status).
+--- a/include/system/whpx.h
++++ b/include/system/whpx.h
+@@ -24,6 +24,7 @@
+ #endif /* COMPILING_PER_TARGET */
+ 
+ #ifdef CONFIG_WHPX_IS_POSSIBLE
++int whpx_balloon_mapping(bool add, void *host, uint64_t guest, size_t size);
+ extern bool whpx_allowed;
+ extern bool whpx_irqchip_in_kernel;
+ #define whpx_enabled() (whpx_allowed)

@@ -229,14 +229,6 @@ function Environment({ context, refresh, children }) {
         })
         .catch(() => {});
     }
-    if (ready) return;
-    const action = async (name) => {
-      if (name === "quit") await native("quitNow");
-    };
-    window.cageNativeAction = action;
-    return () => {
-      if (window.cageNativeAction === action) delete window.cageNativeAction;
-    };
   }, [ready, defaultLocal]);
   const act = async (name, operation) => {
     if (runningAction.current) return;

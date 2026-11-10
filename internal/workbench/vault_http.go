@@ -41,6 +41,7 @@ func (s *Server) vaultList(w http.ResponseWriter, r *http.Request) {
 	var out vaultData
 	err := s.account.withVault(r.Context(), false, func(db *vaultData) error {
 		out = *db
+		out.GuestPasswords = nil
 		for i := range out.Entries {
 			out.Entries[i].Password = ""
 		}

@@ -20,7 +20,6 @@ import (
 	"github.com/lima-vm/sshocker/pkg/reversesshfs"
 	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/host"
-	"github.com/sylvinus/agent-vm/internal/mounts"
 	"golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
@@ -443,7 +442,7 @@ func (r *Runtime) shareEnvironment(ctx context.Context, client *ssh.Client) (<-c
 	stop := func() { _ = writer.Close(); _ = session.Close() }
 	done := make(chan error, 1)
 	go func() {
-		err := reversesshfs.ServeConfined(&shareTransport{Reader: reader, Writer: writer, close: stop}, workspace, false, mounts.BaseNames)
+		err := reversesshfs.ServeConfined(&shareTransport{Reader: reader, Writer: writer, close: stop}, workspace, false, nil)
 		stop()
 		_ = session.Wait()
 		done <- err

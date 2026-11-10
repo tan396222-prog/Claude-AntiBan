@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/github/v/release/tan396222-prog/Claude-AntiBan?include_prereleases)](https://github.com/tan396222-prog/Claude-AntiBan/releases) [![CI](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**[የፕሮጀክት ድር ጣቢያ](https://github.com/tan396222-prog/Claude-AntiBan) · [Français](https://github.com/tan396222-prog/Claude-AntiBan) · [መተግበሪያውን ያውርዱ](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [በመጀመር ላይ](docs/getting-started.md) · [የሚጠየቁ ጥያቄዎች](docs/troubleshooting.md) · [አዋጡ](CONTRIBUTING.md) · [የአጠቃቀም መመሪያ (በቻይንኛ)](docs/README.md)**
+**[የፕሮጀክት ድር ጣቢያ](https://github.com/tan396222-prog/Claude-AntiBan) · [መተግበሪያውን ያውርዱ](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [በመጀመር ላይ](docs/getting-started.md) · [የሚጠየቁ ጥያቄዎች](docs/troubleshooting.md) · [የአጠቃቀም መመሪያ (በቻይንኛ)](docs/README.md)**
 
 [简体中文](README.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [한국어](README.ko.md) · [Español](README.es.md) · [မြန်မာဘာသာ](README.my.md) · [Беларуская](README.be.md) · [پښتو](README.ps.md) · [دری](README.prs.md) · [አማርኛ](README.am.md) · [Soomaali](README.so.md) · [ትግርኛ](README.ti.md) · [Français](README.fr.md)
 
@@ -18,7 +18,7 @@
 
 እንደ ተራ ተጠቃሚዎች ከClaude ጋር ለመነጋገር እና ለመተባበር፣ ስለ መለያ እገዳዎች እና የገንዘብ ኪሳራዎች እየተጨነቅን የVPS ምሳሌዎችን፣ የአሳሽ አሻራ መገለጫዎችን እና የአካባቢ ፍተሻዎችን ማዋቀር ሰልችቶናል። እናቀርባለን። **Claude 防封** -**ለመጠቀም ዝግጁ የሆነ የዴስክቶፕ መተግበሪያ፡ የራስዎን የአውታረ መረብ ፕሮክሲ ያዋቅሩ እና የእርስዎን ገለልተኛ አካባቢ፣ የሰዓት ሰቅ፣ ቋንቋ እና የአካባቢ ፍተሻዎችን በአንድ ቦታ ያስተዳድሩ።**
 
-Claude 防封 የሊኑክስ ተርሚናልን፣ አሳሽ እና ፋይል አርታዒን በአንድ የዴስክቶፕ መተግበሪያ ውስጥ የሚያጣምር ቀላል ክብደት ያለው የሊኑክስ ቨርቹዋል ማሽን ነው። የእሱ ዋና ባህሪያት የሚከተሉትን ያካትታሉ:
+Claude 防封 ተርሚናልን፣ አሳሽን፣ አርታዒን እና ኦፊሴላዊውን Claude Desktop በአንድ የተለየ የሥራ ቦታ ያጣምራል። በMac ላይ macOS ቨርቹዋል ማሽን፣ በተስማሚ Windows ኮምፒውተር ላይ Windows ወይም ቀላል Linux አካባቢ ይጠቀሙ። የመረጡትን ፕሮጀክቶች ያጋሩ፣ አውታረ መረቡን በተናጠል ያስተዳድሩ፣ ከራስዎ አገልጋይ ጋር በSSH ይገናኙ እና ከስልክ ሥራ ይቀጥሉ። ዋና ባህሪያት፦
 
 - ከአስተናጋጁ ተነጥለው የአውታረ መረብ ቅንብሮች; Cage ሁሉንም የአውታረ መረብ ትራፊክ በአካባቢያቸው ውስጥ በራሱ የአውታረ መረብ ፕሮክሲ በኩል ያደርሳል
 - የሰዓት ሰቅ እና ቋንቋን ጨምሮ ከአስተናጋጁ የተገለሉ የአሳሽ አሻራ ቅንጅቶች ከአውታረ መረቡ ተኪ አይፒ አካባቢ ጋር በራስ ሰር ማመሳሰል
@@ -38,12 +38,14 @@ Claude 防封 የሊኑክስ ተርሚናልን፣ አሳሽ እና ፋይል �
 ## በ Cage ምን ማድረግ ይችላሉ
 
 - **በአንድ መስኮት ውስጥ ይስሩ.** በተርሚናል ውስጥ የClaude ኮድን ያሂዱ፣ በአርታዒው ላይ የተደረጉ ለውጦችን ይገምግሙ እና አገልግሎቶችን አስቀድመው ለማየት እና ለመግባት የCage አሳሹን ይጠቀሙ።
+- **በሚያውቁት ስርዓት ይገንቡ።** macOS፣ Windows ወይም Linux የእንግዳ ስርዓትን ከተዛማጅ መሣሪያዎች ጋር ይምረጡ፤ ወይም የአስተናጋጁን ስርዓት በመቅዳት ንጹህና ገለልተኛ አካባቢ ይፍጠሩ። [የእንግዳ ስርዓት ምርጫ](docs/guide/guest-systems.md)
 - **የሚያጋሩትን ይቆጣጠሩ።** ነባሪው የስራ ቦታ እና በግልፅ የተከፈቱ የፕሮጀክት ማህደሮች ብቻ ነው የሚጋሩት። የአስተናጋጁ Claude የመግባት ሁኔታ፣ የአሳሽ መገለጫዎች እና የኤስኤስኤች ቁልፎች በራስ ሰር አይመጡም።
 - **የአውታረ መረብ ሁኔታዎን ይመልከቱ።** አብሮገነብ የአውታረ መረብ ተኪ አስተዳደር የደንበኝነት ምዝገባዎችን እንድታስመጣ፣ የመጨረሻ ነጥቦችን እንድትመርጥ እና መውጫውን አይፒ እንድታረጋግጥ ያስችልሃል። ወሳኝ ፍተሻዎች እስኪያልፍ ድረስ አካባቢው ከመስመር ውጭ ይቆያል። የአውታረ መረቡ ተኪ የማይገኝ ከሆነ ቀጥታ ግንኙነት ወደ ኋላ መመለስ የለም።
 - **በሚቀጥለው ጊዜ ይቀጥሉ.** መሳሪያዎች፣ ፋይሎች እና የመግባት ሁኔታ በምናባዊ ዲስክ ላይ ይቆያሉ። መስኮቱን ሲዘጉ የበስተጀርባ ተግባራት መሮጥ ይችላሉ።
-- **ብዙ የClaude Code መለያዎችን ያስተዳድሩ።** ለአዲስ Claude ተርሚናሎች መለያ ይመደባል፤ የ5 ሰዓትና የ7 ቀን የአጠቃቀም ገደቦችን ማየት ይችላሉ። እየሠሩ ያሉ ተርሚናሎች መለያ በራስ-ሰር አይቀይሩም።
-- **ከስልክዎ ሥራ ይቀጥሉ።** የልማት ሞባይል ክላየንት ከኮምፒውተሩ ጋር በመገናኘት የተዋቀሩ CLI ክፍለ ጊዜዎችንና የመሣሪያ ማጽደቆችን ያቀርባል፤ የርቀት አሳሽ የተለየ ፈቃድ ይፈልጋል። የሞባይል ክላየንቱን ከምንጭ ኮድ መገንባት ያስፈልጋል፤ ማንኛውንም መደበኛ ተርሚናል አይቆጣጠርም።
+- **ብዙ የClaude Code መለያዎችን ያስተዳድሩ።** የአጠቃቀም ገደቦችን ይመልከቱ፣ ለአዲስ ክፍለ ጊዜ መለያ ይመድቡ፣ በግልጽ ፈቃድም መለያ ቀይረው ታሪኩን ይቀጥሉ። [Claude Code](docs/guide/accounts.md)
+- **ከስልክ ይቀጥሉ።** Android ወይም iPhone ከኮምፒውተር ጋር በQR ወይም በማጣመሪያ ኮድ ያገናኙ። ተመሳሳይ የClaude Code ውይይቶችን ይቀጥሉ፣ መልእክት ይላኩ፣ መሣሪያዎችን ያጽድቁ እና የርቀት አሳሽን ወይም የኮምፒውተሩን Claude Desktop መስኮት ይጠቀሙ።
 - **Cage በደመና ያስኪዱ።** መስፈርቶቹን በሚያሟላ Linux x86_64 VPS ላይ ከተጫነ Cage ጋር በSSH ይገናኙ፤ KVM አያስፈልግም። ውሂብና የአውታረ መረብ መውጫ በአገልጋዩ ላይ ናቸው።
+- **በግል አውታረ መረብ ይገናኙ።** በCage ውስጥ Tailscale ግቡና በአስተናጋጁ እና አካባቢው መካከል ባለሁለት አቅጣጫ SSH ይጠቀሙ። [Tailscale / SSH](docs/guide/tailscale.md)
 
 ## ፈጣን ጅምር
 
@@ -57,17 +59,19 @@ Claude 防封 የሊኑክስ ተርሚናልን፣ አሳሽ እና ፋይል �
 
 ## ማውረድ እና መጫን
 
-Cage macOS፣ Windows እና Linux ይደግፋል፦ Apple Silicon ከ macOS 14+፣ Windows 10 22H2 / 11 x64 እና Debian 12 / Ubuntu 24.04 x86_64። Windows እና Linux አሁንም በሙከራ ላይ ናቸው። የጥቅል አቅርቦት፣ ፊርማ እና የሙከራ ወሰን በልቀት ማስታወሻዎች ይገለጻሉ። Intel Mac፣ Windows ARM64 እና Linux ARM64 ገና አይደገፉም። [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
+Cage macOS፣ Windows እና Linux ይደግፋል፦ Apple Silicon ከ macOS 14+፣ Windows 10 22H2 / 11 x64 እና Debian 12 / Ubuntu 22.04 / 24.04 x86_64. Intel Mac፣ Windows ARM64 እና Linux ARM64 ገና አይደገፉም። [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
 
 1. መተግበሪያውን ያውርዱ: [macOS / Windows / Linux](https://github.com/tan396222-prog/Claude-AntiBan/releases).
 2. macOS: የመጫኛ ጥቅሉን ይክፈቱ እና ይጎትቱ **Cage** ውስጥ **መተግበሪያዎች**; ከዚያ ከመተግበሪያዎች ያስጀምሩት። Windows: [የመጫኛ መመሪያ](docs/windows.md#安装并开始工作) · Linux: [የመጫኛ መመሪያ](docs/linux.md#安装并开始工作).
 3. የራስዎን የአውታረ መረብ ፕሮክሲ ለማዋቀር፣ አካባቢውን ለመጀመር እና ፕሮጀክት ለመክፈት የውስጠ-መተግበሪያ መመሪያዎችን ይከተሉ።
 
-ጫኚው የስራ ቤንች እና የኔትወርክ ፕሮክሲ ኮርን ያካትታል። ዕለታዊ አጠቃቀም Go፣ Node.js፣ Docker ወይም Clash መጫን አያስፈልገውም። መጀመሪያ ማስጀመር የሊኑክስን ምስል እና የግንባታ መሳሪያዎችን ለማውረድ አሁንም የበይነመረብ ግንኙነት ይፈልጋል። Cage የኔትወርክ ተኪ አገልግሎትም ሆነ የClaude መለያ አይሰጥም።
+ጫኚው የሥራ ቦታን እና የፕሮክሲ ሞተርን ያካትታል። Go፣ Node.js፣ Docker ወይም Clash አስቀድሞ መጫን አያስፈልግም። አካባቢውን ሲፈጥሩ የእንግዳ ስርዓቱን እና የማከማቻ ቦታን ይምረጡ፣ ከዚያ ኦፊሴላዊ ምስሉን እና መሣሪያዎቹን ያዘጋጁ። Cage የስርዓት ፈቃድ፣ የፕሮክሲ አገልግሎት ወይም የClaude መለያ አይሰጥም።
 
-የሚገኙ ይፋዊ ስሪቶችን በ [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases) ይመልከቱ። የምንጭ ኮድ፣ ድር ጣቢያ እና የተለቀቁት ይፋዊ ናቸው። ለጫኚ ፊርማ፣ አፕል ኖተራይዜሽን እና የማረጋገጫ ወሰን የእያንዳንዱን ልቀት ማስታወሻ ይመልከቱ። ንጹህ ማሽን መጫን፣ macOS 14 ን በሚያሄዱ አካላዊ Macs ላይ ተኳሃኝነት፣ የእውነተኛ Claude መለያ ፈቃድ እና የሞዴል ጥያቄዎች አሁንም ሙሉ ማረጋገጫ ያስፈልጋቸዋል።
+ምንጭ ኮድ እና ጫኚዎች ለሕዝብ ክፍት ናቸው። የስሪት ማስታወሻዎችን እና ቼክሰሞችን በ [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases) ይመልከቱ።
 
-የ macOS እና Windows ዝማኔዎች በተመረጠው ፕሮክሲ ይወርዳሉ፤ ወደ ቀጥታ ግንኙነት አይቀየሩም። ከመጫን በፊት ሥራውን ያስቀምጡ እና ያቁሙ። macOS የተመሳሳይ አሳታሚ Developer ID ፊርማ እና የ Apple ማረጋገጫ ይፈልጋል፤ Windows የታመነ Authenticode ፊርማ እና የተመሳሳይ አሳታሚ ይፋዊ ቁልፍ ይፈልጋል። ያልተፈረመ Windows ቅድመ እይታ እና Linux በእጅ ይዘምናሉ። [ማዘመን እና ማስወገድ](docs/getting-started.md#升级与卸载)።
+ባህሪያት በሚጠቀሙት ግንባታ ይወሰናሉ፤ የሕዝብ መጫኛው ችሎታና የሙከራ ወሰን በልቀት ማስታወሻ ይገለጻሉ።
+
+macOS እና የተፈረሙ Windows ስሪቶች በተመረጠው ፕሮክሲ ይዘምናሉ። ያልተፈረመ Windows ቅድመ እይታና Linux በመጫኛ በእጅ ይዘምናሉ። ከማዘመን በፊት ሥራን ያስቀምጡና ያቁሙ፤ የግል ውሂብ ይቀጥላል። [ማዘመን እና ማስወገድ](docs/guide/maintenance.md)
 
 ## በሶስት ደረጃዎች ይጀምሩ
 
@@ -77,7 +81,7 @@ Cage macOS፣ Windows እና Linux ይደግፋል፦ Apple Silicon ከ macOS 14
 
 ### 2. አካባቢውን ይጀምሩ
 
-ወደ የሥራ ቦታው ይመለሱ እና 'ጀምር Cage አካባቢ' ን ጠቅ ያድርጉ። የአስተናጋጁ Git ማዋቀር የደህንነት ጥበቃ ከሚያስፈልገው፣ መተግበሪያው በመጀመሪያ ውጤቱን ያብራራል። 'ጥበቃን አንቃ እና ቀጥል' የሚለውን ጠቅ በማድረግ ይተግብሩ። ተራ ፕሮጀክቶች ላይ ቁርጠኝነት እና መጎተት ምንም ችግር የለውም። Cage ምስሉን ያወርዳል፣ መሳሪያዎችን ይጭናል እና የአውታረ መረብ ፍተሻዎችን ያካሂዳል። የሂደቱን ሂደት በ'ኦፕሬሽን ዝርዝሮች' ይመልከቱ። አንዴ አካባቢው ዝግጁ ከሆነ እና ወሳኝ ቼኮች ካለፉ በመስመር ላይ መስራት ይችላሉ። ቼክ ካልተሳካ፣ ችግሩን ለማስተካከል መመሪያዎቹን ይከተሉ እና እንደገና ይሞክሩ።
+መጀመሪያ ሲፈጥሩ የእንግዳ ስርዓት ወይም የአስተናጋጁን ስርዓት መቅዳትና የማከማቻ ቦታ ይምረጡ። Cage አካባቢን አስጀምሩና የመጫን እና የፈቃድ መመሪያን ይከተሉ። ሂደትና ስህተቶች በሥራ ዝርዝር ይታያሉ። ቀጣይ ጅማሬዎች ያንኑ አካባቢ ይጠቀማሉ።
 
 ### 3. ፕሮጀክት ይክፈቱ እና Claude ያሂዱ
 
@@ -85,12 +89,12 @@ Cage macOS፣ Windows እና Linux ይደግፋል፦ Apple Silicon ከ macOS 14
 
 ## ከመጠቀምዎ በፊት እነዚህን ገደቦች ይረዱ
 
-- በጋራ ፕሮጀክቶች ውስጥ ያሉ አርትዖቶች እና ስረዛዎች በእርስዎ ኮምፒውተር ላይ ያሉ ፋይሎችን በቀጥታ ይነካሉ። የስሪት መቆጣጠሪያን ወይም ምትኬዎችን ተጠቀም።`.git` እና ሌሎች ሜታዳታ በነባሪነት ተነባቢ-ብቻ ናቸው; Git መፈጸምን በ ኮምፒውተር ላይ ያድርጉ።
+- በጋራ ፕሮጀክቶች ውስጥ ያሉ አርትዖቶች እና ስረዛዎች በእርስዎ ኮምፒውተር ላይ ያሉ ፋይሎችን በቀጥታ ይነካሉ። የስሪት መቆጣጠሪያን ወይም ምትኬዎችን ተጠቀም።የፕሮጀክቱ `.git` ማንበብና መጻፍ ይቻላል፤ በ Cage ውስጥ ለውጦችን ማዘጋጀት፣ commit ማድረግና branch መቀየር ይቻላል።
 - ሁሉም ፕሮጀክቶች መሳሪያዎቹን፣ መለያዎቹን እና የሊኑክስ ፋይል ስርዓቱን ጨምሮ አንድ የ Cage አካባቢን ይጋራሉ። ፕሮጀክቶች አንዱ ከሌላው የተገለሉ አይደሉም።
-- እንግዳው በአሁኑ ጊዜ የወል IPv4 TCP በአውታረመረብ ፕሮክሲ በኩል፣ ዲ ኤን ኤስ በተመሳሳይ ፕሮክሲ የተላከ ነው። ይፋዊ UDP፣ IPv6፣ ICMP እና በእንግዳ የተጀመሩ ከአስተናጋጁ ወይም ከአካባቢያዊ አውታረመረብ ጋር ያሉ ግንኙነቶች ታግደዋል። በእነዚህ ችሎታዎች ላይ የተመሰረቱ መሳሪያዎች ላይሰሩ ይችላሉ.
+- በነባሪ የውጭ አውታረ መረብ IPv4 TCP ይደግፋል፣ DNS በዚያው ፕሮክሲ ይላካል። የሕዝብ UDP፣ IPv6፣ ICMP እና ቀጥታ ወደ አስተናጋጅ ወይም LAN ግንኙነት የተገደቡ ናቸው። Tailscale በግልጽ ሲነቃ የመሣሪያ ግንኙነት የግል አውታረ መረቡን ፈቃድ ይከተላል።
 - የአውታረ መረብ ፍተሻዎች የአሁኑን ውቅር እና የናሙና ማስረጃዎችን ያሳያሉ። መለያ የመድረክ ገደቦችን እንደሚያስወግድ ዋስትና ሊሰጡ አይችሉም እና የተሟላ የቨርችዋል ሴኪዩሪቲ ኦዲትን አይተኩም።
 
-ለዝርዝር መረጃ ይመልከቱ [የአውታረ መረብ እና የውሂብ ገደቦች](docs/getting-started.md#网络与数据边界), [የአውታረ መረብ ቼኮች ንድፍ](docs/design/network-checks.md) እና [አብሮ የተሰራ የአውታረ መረብ ተኪ ንድፍ](docs/design/managed-proxy.md).
+ለዝርዝር መረጃ ይመልከቱ [የአውታረ መረብ እና የውሂብ ገደቦች](docs/getting-started.md#网络与数据边界).
 
 ## ሰነዶች እና አስተዋጽዖዎች
 
@@ -98,19 +102,19 @@ Cage macOS፣ Windows እና Linux ይደግፋል፦ Apple Silicon ከ macOS 14
 
 | የእርስዎ ተግባር | እዚ ጀምር |
 |---|---|
+| macOS / Windows / Debian / Ubuntu 22.04 | [የእንግዳ ስርዓት ምርጫ](docs/guide/guest-systems.md) |
 | የአውታረ መረብ ተኪ ጫን፣ አዋቅር እና የመጀመሪያህን ፕሮጀክት ክፈት | [በመጀመር ላይ](docs/getting-started.md) |
 | ማውረዶችን፣ ጅምርን፣ ግንኙነትን እና መግባትን መላ ፈልግ | [የሚጠየቁ ጥያቄዎች እና መልሶ ማግኛ](docs/troubleshooting.md) |
 | የቁልፍ ሰሌዳ መቆጣጠሪያዎችን፣ መልክን፣ የውሂብን ጽናት እና የመውጣት ባህሪን ተማር | [ዕለታዊ አጠቃቀም](docs/getting-started.md#日常使用) |
-| ከምንጩ ይገንቡ ወይም ማሻሻያዎችን ያበረክቱ | [የአስተዋጽኦ መመሪያ](CONTRIBUTING.md) |
-| የሞዱል ኃላፊነቶችን እና የአውታረ መረብ ገደቦችን ይረዱ | [የሥራ ቦታ ንድፍ](docs/design/workbench.md) |
 | ሊባዛ የሚችል ጉዳይ ሪፖርት ያድርጉ | [GitHub Issues](https://github.com/tan396222-prog/Claude-AntiBan/issues) |
 
 ፕሮጀክቱ በፍጥነት እያደገ ነው. ግብረመልስ ለማጋራት የማህበረሰብ ቡድኑን ይቀላቀሉ; የማህበረሰብ ጠባቂዎች እንኳን ደህና መጡ።
+
 ## አመጣጥ እና ፈቃድ
 
-Cage የመጣው ከ [agent-vm](https://github.com/sylvinus/agent-vm) ; የላይኛው መነሻ መስመር ነው። `652688aae92c35ce536b9be52262e1cc5ec6e03a`.
+Cage የመጣው ከ [agent-vm](https://github.com/sylvinus/agent-vm).
 
-የፕሮጀክቱ ዋና ፈቃድ ነው። [MIT](LICENSE). የተጠቀለሉ ክፍሎች የየራሳቸውን ፈቃዶች እንደያዙ ይቆያሉ። ሚሆሞ በGPL-3.0 ስር እንደ የተለየ ተፈጻሚነት ይሰራጫል። እንዲሁም ይመልከቱ [NOTICE](NOTICE), [የሶስተኛ ወገን ፍቃዶች](THIRD_PARTY_LICENSES), [የሶስተኛ ወገን ምንጮች](third_party/SOURCES) እና [noVNC ፕሮቬንሽን](ui/vendor/novnc/README.cage.md). የላይኛው ፕሮጀክት መግለጫ በ ውስጥ ተጠብቆ ይቆያል [ወደላይ README](docs/agent-vm-upstream.md).
+የፕሮጀክቱ ዋና ፈቃድ ነው። [MIT](LICENSE). የተጠቀለሉ ክፍሎች የየራሳቸውን ፈቃዶች እንደያዙ ይቆያሉ። ሚሆሞ በGPL-3.0 ስር እንደ የተለየ ተፈጻሚነት ይሰራጫል። እንዲሁም ይመልከቱ [NOTICE](NOTICE) · [የሶስተኛ ወገን ፍቃዶች](THIRD_PARTY_LICENSES) · [noVNC](ui/vendor/novnc/LICENSE.txt)。
 
 Cage ራሱን የቻለ የማህበረሰብ ፕሮጀክት ነው እና ከAnthropic ጋር ግንኙነት የለውም።
 
@@ -127,3 +131,4 @@ Cage ራሱን የቻለ የማህበረሰብ ፕሮጀክት ነው እና ከ
 - [code-server](https://github.com/coder/code-server): በአሳሽ ላይ የተመሰረተ ኮድ አርታዒ.
 - [AIO Sandbox](https://github.com/agent-infra/sandbox) የሥራ አካባቢ እና መስተጋብር ንድፍ ማጣቀሻዎች.
 - [claude-switcher](https://github.com/YOURSJEYO/claude-switcher) እና [Claude-Guardian](https://github.com/DUNHKpcc/Claude-Guardian) ለአውታረ መረብ ፍተሻዎች እና የደህንነት ምርመራዎች ማጣቀሻዎች።
+

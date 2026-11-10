@@ -16,7 +16,6 @@ import (
 
 	"github.com/lima-vm/sshocker/pkg/reversesshfs"
 	"github.com/pkg/sftp"
-	"github.com/sylvinus/agent-vm/internal/mounts"
 )
 
 func TestProjectSelectionKeepsOneVMAndExistingSessionsOffline(t *testing.T) {
@@ -63,7 +62,7 @@ func TestProjectSelectionKeepsOneVMAndExistingSessionsOffline(t *testing.T) {
 	}
 }
 
-func TestLiveProjectTransportConfinesReadsAndProtectsMetadata(t *testing.T) {
+func TestLiveProjectTransportConfinesReadsAndAllowsGitWrites(t *testing.T) {
 	parent := t.TempDir()
 	root := filepath.Join(parent, "project")
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0700); err != nil {
@@ -78,7 +77,10 @@ func TestLiveProjectTransportConfinesReadsAndProtectsMetadata(t *testing.T) {
 	}
 	server, conn := net.Pipe()
 	done := make(chan struct{})
-	go func() { defer close(done); _ = reversesshfs.ServeConfined(server, root, false, mounts.BaseNames) }()
+	go func() {
+		defer close(done)
+		_ = reversesshfs.ServeConfined(server, root, false, nil)
+	}()
 	client, err := sftp.NewClientPipe(conn, conn)
 	if err != nil {
 		t.Fatal(err)
@@ -103,9 +105,8 @@ func TestLiveProjectTransportConfinesReadsAndProtectsMetadata(t *testing.T) {
 			t.Fatalf("read escaped selected project: %s", p)
 		}
 	}
-	if f, err := client.Create(filepath.Join(root, ".git", "config")); err == nil {
-		_ = f.Close()
-		t.Fatal("Git metadata was writable")
+	if err := exerciseProjectGitWrites(client, filepath.ToSlash(root)); err != nil {
+		t.Fatal(err)
 	}
 	f, err := client.Open(filepath.Join(root, "note.txt"))
 	if err != nil {
@@ -116,6 +117,34 @@ func TestLiveProjectTransportConfinesReadsAndProtectsMetadata(t *testing.T) {
 	if err != nil || string(got) != "shared" {
 		t.Fatal("shared file read failed")
 	}
+}
+
+// Git writes temporary objects and lock files, then renames or removes them.
+// Exercise these through SFTP rather than host-side filesystem writes.
+func exerciseProjectGitWrites(client *sftp.Client, root string) error {
+	for _, dir := range []string{".git/objects/ab", ".git/refs/heads", ".git/logs/refs/heads", ".git/hooks", ".vscode", ".claude", ".hg/store"} {
+		if err := client.MkdirAll(root + "/" + dir); err != nil {
+			return err
+		}
+	}
+	for _, name := range []string{".git/config", ".git/index", ".git/HEAD", ".git/refs/heads/main", ".git/logs/refs/heads/main", ".git/objects/ab/object", ".git/hooks/pre-commit", ".env", ".vscode/settings.json", ".claude/settings.json", ".hg/store/data", "private.key"} {
+		file, err := client.Create(root + "/" + name + ".lock")
+		if err != nil {
+			return err
+		}
+		_, err = file.Write([]byte("git-write"))
+		closeErr := file.Close()
+		if err != nil {
+			return err
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+		if err = client.PosixRename(root+"/"+name+".lock", root+"/"+name); err != nil {
+			return err
+		}
+	}
+	return client.Remove(root + "/.git/objects/ab/object")
 }
 
 func TestProjectListComesFromSavedDirectories(t *testing.T) {

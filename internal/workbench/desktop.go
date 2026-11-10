@@ -61,8 +61,14 @@ func openController(profile string) (*controllerClient, error) {
 }
 
 func connectController(profile string) (*controllerClient, error) {
+	if controllerLockFree(profile) {
+		return nil, errControllerUnavailable
+	}
 	c, err := openController(profile)
 	if err != nil {
+		if controllerLockFree(profile) {
+			return nil, errControllerUnavailable
+		}
 		return nil, err
 	}
 	record := c.record
@@ -77,6 +83,15 @@ func connectController(profile string) (*controllerClient, error) {
 	}
 	if status != http.StatusOK {
 		c.close()
+		if status == http.StatusServiceUnavailable {
+			return nil, errControllerUnavailable
+		}
+		// A dead controller can leave a record whose port or PID is now reused.
+		// Only a free profile lock permits a new controller to replace that
+		// record. An occupied or inaccessible lock must preserve its owner.
+		if controllerLockFree(profile) {
+			return nil, errControllerUnavailable
+		}
 		return nil, errors.New("无法认证已有后台，未尝试终止或替换它。")
 	}
 	u, err := url.Parse(c.launch.URL)
@@ -91,6 +106,30 @@ func connectController(profile string) (*controllerClient, error) {
 	return c, nil
 }
 func (c *controllerClient) close() { c.client.CloseIdleConnections() }
+
+// Shutdown removes the record before releasing the profile lock. A new window
+// can arrive in that interval; wait for retirement or a ready service without
+// spawning a replacement against an occupied lock.
+func waitControllerReady(ctx context.Context, profile string) (*controllerClient, error) {
+	for {
+		c, err := connectController(profile)
+		if !errors.Is(err, errControllerUnavailable) {
+			return c, err
+		}
+		free, lockErr := controllerLockStatus(profile)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		if free {
+			return nil, errControllerUnavailable
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.New("本机后台尚未退出或仍未响应，请稍后重试")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
 func (c *controllerClient) call(method, path string, input, output any) (int, error) {
 	return c.callContext(context.Background(), method, path, input, output)
 }
@@ -140,7 +179,9 @@ func desktopLaunch(profile string, gateway bool, options DesktopOptions, start f
 	if err != nil {
 		return DesktopResult{}, err
 	}
-	current, err := connectController(profile)
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	current, err := waitControllerReady(ctx, profile)
 	if err == nil {
 		defer current.close()
 		if current.launch.DesktopGateway != gateway {
@@ -202,9 +243,14 @@ func desktopLaunch(profile string, gateway bool, options DesktopOptions, start f
 // PrepareUpdate is shared by the explicit migration button and the installer.
 // It returns only after the old service has released its profile lock.
 func PrepareUpdate(configPath string, stop bool) (DesktopResult, error) {
-	c, err := connectController(filepath.Dir(configPath))
+	// A closing controller stops accepting requests before releasing its lock.
+	// Use the same bounded retirement wait as desktop startup; the lock and VM
+	// checks below still decide whether replacing the application is safe.
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	c, err := waitControllerReady(ctx, filepath.Dir(configPath))
 	if errors.Is(err, errControllerUnavailable) {
-		lock, lockErr := os.OpenFile(filepath.Join(filepath.Dir(configPath), "control.lock"), os.O_RDWR, 0600)
+		lock, lockErr := openControllerLock(filepath.Dir(configPath), os.O_RDWR)
 		if lockErr == nil {
 			defer lock.Close()
 			if lockController(lock) != nil {
@@ -230,15 +276,35 @@ func PrepareUpdate(configPath string, stop bool) (DesktopResult, error) {
 		return DesktopResult{Status: "prepared"}, nil
 	}
 	if c.launch.Controller.Protocol == controlProtocol {
-		status, err := c.call("POST", "/api/handoff", map[string]string{"token": c.record.Token}, nil)
-		if err != nil {
-			return DesktopResult{}, err
-		}
-		if status == http.StatusOK {
-			if err = c.waitForExit(); err != nil {
+		// Routine status probes also hold the operation lock. Retry briefly.
+		// every request still checks running jobs, terminals and VM ownership.
+		handoffCtx, cancelHandoff := context.WithTimeout(ctx, 3*time.Second)
+		defer cancelHandoff()
+		conflicted := false
+	handoff:
+		for {
+			status, err := c.callContext(handoffCtx, "POST", "/api/handoff", map[string]string{"token": c.record.Token}, nil)
+			if err != nil {
+				if conflicted && handoffCtx.Err() != nil {
+					break
+				}
 				return DesktopResult{}, err
 			}
-			return DesktopResult{Status: "prepared"}, nil
+			if status == http.StatusOK {
+				if err = c.waitForExit(); err != nil {
+					return DesktopResult{}, err
+				}
+				return DesktopResult{Status: "prepared"}, nil
+			}
+			if status != http.StatusConflict {
+				break
+			}
+			conflicted = true
+			select {
+			case <-handoffCtx.Done():
+				break handoff
+			case <-time.After(50 * time.Millisecond):
+			}
 		}
 	}
 	return DesktopResult{Status: "stop_required", Message: "请保存文件后确认停止环境并安装更新。终端任务会结束，项目和登录状态会保留。"}, nil
@@ -357,7 +423,7 @@ func (c *controllerClient) stopAndHandoff() error {
 	return c.waitForExit()
 }
 func (c *controllerClient) waitForExit() error {
-	f, err := os.OpenFile(filepath.Join(c.profile, "control.lock"), os.O_RDWR, 0600)
+	f, err := openControllerLock(c.profile, os.O_RDWR)
 	if err != nil {
 		return errors.New("无法确认后台已退出，未继续更新。")
 	}

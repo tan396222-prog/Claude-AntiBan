@@ -160,14 +160,18 @@ func WindowsPrereqs(out, w io.Writer) bool {
 // WHPX.
 const WHPXOn = "DISM /Online /Enable-Feature /FeatureName:HypervisorPlatform /All"
 
-// WindowsStartHint explains, after a failed start on Windows whose logs
-// show QEMU could not use WHPX, how to turn it on.
+// WindowsStartHint distinguishes an unavailable hypervisor from a QEMU
+// initialization failure on a host where WHPX is already enabled.
 func WindowsStartHint(w io.Writer, logs ...string) {
 	if runtime.GOOS != "windows" {
 		return
 	}
 	for _, l := range logs {
 		if b, err := os.ReadFile(l); err == nil && strings.Contains(strings.ToLower(string(b)), "whpx") {
+			if windowsHypervisorReady() == nil {
+				fmt.Fprintln(w, "Windows Hypervisor Platform is enabled, but QEMU could not initialize WHPX. Check the original QEMU error and any custom QEMU arguments; Cage uses kernel-irqchip=off for WHPX compatibility.")
+				return
+			}
 			fmt.Fprintf(w, `QEMU could not use the Windows hypervisor. It needs the "Windows Hypervisor
 Platform" Windows feature, which an administrator turns on once, followed by
 a reboot: in Windows Features, or from an administrator terminal:

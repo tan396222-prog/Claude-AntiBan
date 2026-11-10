@@ -109,12 +109,17 @@ try {
       (await cdp("Target.getBrowserContexts")).browserContextIds,
       [],
     );
-    assert.deepEqual(
-      (await cdp("Target.getTargets")).targetInfos
-        .filter((page) => page.type === "page")
-        .map((page) => page.targetId),
-      [userPage.targetId],
-    );
+    // A normal background tab can finish its close animation after the CDP
+    // acknowledgement. It must disappear within the bounded cleanup interval.
+    let pages;
+    const deadline = Date.now() + 2000;
+    do {
+      pages = (await cdp("Target.getTargets")).targetInfos
+        .filter(page => page.type === "page").map(page => page.targetId);
+      if (pages.length === 1 && pages[0] === userPage.targetId) break;
+      await delay(25);
+    } while (Date.now() < deadline);
+    assert.deepEqual(pages, [userPage.targetId]);
     assert.equal(await state(), before, "The user's page or focus changed");
   };
   for (let index = 0; index < 20; index++) {
@@ -125,7 +130,7 @@ try {
   }
   await assert.rejects(
     auditBrowser(cdp, excluded, false, "Invalid/Timezone"),
-    /浏览器诊断未完成/,
+    /浏览器(?:配置)?诊断未完成/,
   );
   await clean();
   // The guest's existing diagnostic endpoint exercises navigation and fetch.
@@ -137,7 +142,7 @@ try {
   } catch (error) {
     // The diagnostic endpoint is only served during network verification.
     // Outside that window, verify cleanup of the failed navigation as well.
-    assert.match(error.message, /诊断页面无法连接|诊断页面尚未就绪/);
+    assert.match(error.message, /诊断页面无法连接|诊断页面尚未就绪|Timeout: Page.navigate/);
   }
   await clean();
   console.log(

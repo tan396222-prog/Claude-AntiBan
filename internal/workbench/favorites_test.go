@@ -1,9 +1,11 @@
 package workbench
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/sylvinus/agent-vm/internal/host"
+	"github.com/sylvinus/agent-vm/internal/mobilelink"
 	"os"
 	"path/filepath"
 	"sync"
@@ -101,5 +103,47 @@ func TestConcurrentFavoritesKeepBothAdditions(t *testing.T) {
 	f, err := s.readFavorites()
 	if err != nil || len(f.Items) != 8 {
 		t.Fatalf("concurrent additions lost: %+v, %v", f, err)
+	}
+}
+
+// Exercise the desktop store through the same paired transport used by the native apps.
+func testSharedPhoneFavorites(t *testing.T, ctx context.Context, s *Server, phone *mobilelink.Client) {
+	t.Helper()
+	const path = "/api/mobile/browser/favorites"
+	call := func(method, body string) Favorites {
+		t.Helper()
+		reply, err := phone.Do(ctx, method, path, []byte(body))
+		if err != nil || reply.Status != 200 {
+			t.Fatalf("paired favorites: %+v %v", reply, err)
+		}
+		var f Favorites
+		if err := json.Unmarshal(reply.Body, &f); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+	if w := pairedHostRequest(s, "GET", path, ""); w.Code != 403 {
+		t.Fatal("unpaired connection could read favorites")
+	}
+	if w := pairedHostRequest(s, "POST", path, `{"action":"save_folder","title":"forbidden"}`); w.Code != 403 {
+		t.Fatal("unpaired connection could write favorites")
+	}
+	w := pairedHostRequest(s, "POST", "/api/favorites", `{"action":"save_folder","title":"Shared"}`)
+	if w.Code != 200 {
+		t.Fatal(w.Code)
+	}
+	initial := call("GET", "")
+	if len(initial.Folders) != 1 || initial.Folders[0].Title != "Shared" {
+		t.Fatal("phone missed desktop folder")
+	}
+	f := call("POST", fmt.Sprintf(`{"action":"save","title":"Docs","url":"https://example.com/docs","folder_id":%q}`, initial.Folders[0].ID))
+	var desktop Favorites
+	w = pairedHostRequest(s, "GET", "/api/favorites", "")
+	if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &desktop) != nil || len(desktop.Items) != 1 || len(f.Items) != 1 || f.Items[0] != desktop.Items[0] {
+		t.Fatal("desktop did not see phone bookmark")
+	}
+	w = pairedHostRequest(s, "POST", "/api/favorites", fmt.Sprintf(`{"action":"delete","id":%q}`, f.Items[0].ID))
+	if w.Code != 200 || len(call("GET", "").Items) != 0 {
+		t.Fatal("desktop deletion did not reach phone")
 	}
 }

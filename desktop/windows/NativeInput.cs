@@ -13,6 +13,8 @@ internal sealed class NativeInput : TextBox
     private bool composing, resetting;
     private Keys lastKey;
     private bool repeating;
+    private int scanCode;
+    private bool extendedKey;
     private char? highSurrogate;
 
     internal NativeInput(Action<Dictionary<string, object?>> publish)
@@ -79,6 +81,7 @@ internal sealed class NativeInput : TextBox
     {
         if (!composing && (keyData & (Keys.Control | Keys.Alt)) != 0)
         {
+            ReadKeyMessage(msg);
             Key(keyData & Keys.KeyCode, true);
             return true;
         }
@@ -113,7 +116,8 @@ internal sealed class NativeInput : TextBox
     }
     private static bool IsCommand(Keys key) => key is Keys.Enter or Keys.Tab or Keys.Back or Keys.Delete or Keys.Escape or
         Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown or
-        Keys.ShiftKey or Keys.ControlKey or Keys.Menu or Keys.LWin or Keys.RWin or Keys.CapsLock || key >= Keys.F1 && key <= Keys.F24;
+        Keys.ShiftKey or Keys.ControlKey or Keys.Menu or Keys.LWin or Keys.RWin or Keys.CapsLock or Keys.Insert or
+        Keys.PrintScreen or Keys.Scroll or Keys.Pause or Keys.NumLock or Keys.Apps or Keys.Clear || key >= Keys.F1 && key <= Keys.F24;
 
     private void Key(Keys key, bool down, string? text = null)
     {
@@ -125,22 +129,56 @@ internal sealed class NativeInput : TextBox
             Keys.ShiftKey => ("Shift", "ShiftLeft"), Keys.ControlKey => ("Control", "ControlLeft"), Keys.Menu => ("Alt", "AltLeft"),
             Keys.LWin => ("Meta", "MetaLeft"), Keys.RWin => ("Meta", "MetaRight"), Keys.CapsLock => ("CapsLock", "CapsLock"),
             Keys.Home => ("Home", "Home"), Keys.End => ("End", "End"), Keys.PageUp => ("PageUp", "PageUp"), Keys.PageDown => ("PageDown", "PageDown"),
+            Keys.Space => (" ", "Space"), Keys.Insert => ("Insert", "Insert"), Keys.PrintScreen => ("PrintScreen", "PrintScreen"),
+            Keys.Scroll => ("ScrollLock", "ScrollLock"), Keys.Pause => ("Pause", "Pause"), Keys.NumLock => ("NumLock", "NumLock"),
+            Keys.Apps => ("ContextMenu", "ContextMenu"), Keys.Clear => ("Clear", "Numpad5"),
+            Keys.OemSemicolon => (";", "Semicolon"), Keys.Oemplus => ("=", "Equal"), Keys.Oemcomma => (",", "Comma"),
+            Keys.OemMinus => ("-", "Minus"), Keys.OemPeriod => (".", "Period"), Keys.OemQuestion => ("/", "Slash"),
+            Keys.Oemtilde => ("`", "Backquote"), Keys.OemOpenBrackets => ("[", "BracketLeft"), Keys.OemPipe => ("\\", "Backslash"),
+            Keys.OemCloseBrackets => ("]", "BracketRight"), Keys.OemQuotes => ("'", "Quote"), Keys.OemBackslash => ("\\", "IntlBackslash"),
+            Keys.Multiply => ("*", "NumpadMultiply"), Keys.Add => ("+", "NumpadAdd"), Keys.Subtract => ("-", "NumpadSubtract"),
+            Keys.Decimal => (".", "NumpadDecimal"), Keys.Divide => ("/", "NumpadDivide"), Keys.Separator => (",", "NumpadComma"),
             _ when key >= Keys.A && key <= Keys.Z => (key.ToString().ToLowerInvariant(), "Key" + key),
             _ when key >= Keys.D0 && key <= Keys.D9 => (((int)key - (int)Keys.D0).ToString(), "Digit" + ((int)key - (int)Keys.D0)),
+            _ when key >= Keys.NumPad0 && key <= Keys.NumPad9 => (((int)key - (int)Keys.NumPad0).ToString(), "Numpad" + ((int)key - (int)Keys.NumPad0)),
             _ when key >= Keys.F1 && key <= Keys.F24 => (key.ToString(), key.ToString()),
             _ => (text ?? "Unidentified", "Unidentified")
         };
+        var code = key switch {
+            Keys.Enter when extendedKey => "NumpadEnter",
+            Keys.ShiftKey when scanCode == 0x36 => "ShiftRight",
+            Keys.ControlKey when extendedKey => "ControlRight",
+            Keys.Menu when extendedKey => "AltRight",
+            _ => pair.Item2,
+        };
+        if (!extendedKey && key is Keys.Insert or Keys.Delete or Keys.Home or Keys.End or Keys.PageUp or Keys.PageDown or
+            Keys.Left or Keys.Right or Keys.Up or Keys.Down or Keys.Clear)
+        {
+            code = scanCode switch {
+                0x47 => "Numpad7", 0x48 => "Numpad8", 0x49 => "Numpad9", 0x4b => "Numpad4", 0x4c => "Numpad5",
+                0x4d => "Numpad6", 0x4f => "Numpad1", 0x50 => "Numpad2", 0x51 => "Numpad3", 0x52 => "Numpad0",
+                0x53 => "NumpadDecimal", _ => code,
+            };
+        }
         publish(new() { ["owner"] = owner, ["kind"] = down ? "keydown" : "keyup", ["key"] = text ?? pair.Item1,
-            ["code"] = pair.Item2, ["textKey"] = text != null, ["repeat"] = repeating,
+            ["code"] = code, ["textKey"] = text != null, ["repeat"] = repeating,
             ["ctrlKey"] = (ModifierKeys & Keys.Control) != 0, ["altKey"] = (ModifierKeys & Keys.Alt) != 0,
-            ["shiftKey"] = (ModifierKeys & Keys.Shift) != 0, ["metaKey"] = false });
+            ["shiftKey"] = (ModifierKeys & Keys.Shift) != 0, ["metaKey"] = false,
+            ["modifierCapsLock"] = IsKeyLocked(Keys.CapsLock) });
+    }
+
+    private void ReadKeyMessage(Message message)
+    {
+        scanCode = (int)((message.LParam.ToInt64() >> 16) & 0xff);
+        extendedKey = (message.LParam.ToInt64() & (1L << 24)) != 0;
+        repeating = (message.LParam.ToInt64() & (1L << 30)) != 0;
     }
 
     protected override void WndProc(ref Message message)
     {
         const int Start = 0x10d, End = 0x10e, Composition = 0x10f;
         bool committed = false;
-        if (message.Msg == 0x100) repeating = ((long)message.LParam & (1L << 30)) != 0;
+        if (message.Msg is 0x100 or 0x101 or 0x104 or 0x105) ReadKeyMessage(message);
         if (!resetting && owner.Length > 0)
         {
             if (message.Msg == Start) { composing = true; Emit("compositionstart"); }

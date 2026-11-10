@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -40,6 +41,9 @@ internal sealed class AppUpdater : IDisposable
                 Change("manual", "轻量客户端使用独立安装包更新；连接配置会保留，云端任务不受影响。");
             return new(state);
         }
+        if (operation is "check" or "install" &&
+            DateTimeOffset.TryParse(state.GetValueOrDefault("retryAt") as string, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var retryAt) && retryAt > DateTimeOffset.UtcNow)
+            return new(state);
         switch (operation)
         {
             case "status": break;
@@ -51,9 +55,9 @@ internal sealed class AppUpdater : IDisposable
         return new(state);
     }
 
-    private void Change(string phase, string message, bool retryable = false)
+    private void Change(string phase, string message, bool retryable = false, string retryAt = "")
     {
-        state["phase"] = phase; state["message"] = message; state["retryable"] = retryable; changed(new(state));
+        state["phase"] = phase; state["message"] = message; state["retryable"] = retryable; state["retryAt"] = retryAt; changed(new(state));
     }
 
     public void MarkReady()
@@ -71,6 +75,7 @@ internal sealed class AppUpdater : IDisposable
         var token = cancellation.Token;
         Change("checking", "正在通过所选代理检查更新");
         string? archive = null;
+        string retryAt = "";
         using var process = new Process { StartInfo = Backend.StartInfo(Backend.Executable, "app-update", checkOnly ? "check" : "download") };
         var started = false;
         try
@@ -84,6 +89,7 @@ internal sealed class AppUpdater : IDisposable
             {
                 if (line.Length > 65536) throw new IOException("更新响应超过允许大小");
                 last = JsonDocument.Parse(line).RootElement.Clone();
+                retryAt = last.Text("retryAt");
                 foreach (var property in last.EnumerateObject())
                     if (property.Name is not ("archivePath" or "sha256")) state[property.Name] = property.Value.ValueKind switch {
                         JsonValueKind.String => property.Value.GetString(),
@@ -110,7 +116,7 @@ internal sealed class AppUpdater : IDisposable
             Change("ready", "更新已下载并验证，可安装重启", true);
         }
         catch (OperationCanceledException) { Change("failed", "更新已暂停，可稍后重试", true); }
-        catch (Exception error) { Change("failed", error.Message, true); }
+        catch (Exception error) { Change("failed", error.Message, true, retryAt); }
         finally
         {
             if (started && !process.HasExited) process.Kill();

@@ -1,19 +1,14 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
+import { smokeCaptureDirectory } from "./smoke-captures.mjs";
 import { createWorkbench } from "./workbench-fixture.mjs";
 
-const output = fileURLToPath(
-  new URL(
-    "../../docs/test-reports/2026-10-31-project-browser/",
-    import.meta.url,
-  ),
-);
-await fs.mkdir(output, { recursive: true });
+const output = await smokeCaptureDirectory("workbench");
 const { browser, page, state, errors } = await createWorkbench();
 const checks = [];
 const shot = (name) =>
-  page.screenshot({ path: output + name + ".png", animations: "disabled" });
+  page.screenshot({ path: join(output, name + ".png"), animations: "disabled" });
 const settings = async () => {
   await page.getByRole("button", { name: /^设置/ }).click();
   await page.getByRole("navigation", { name: "设置分组" }).getByRole("button", { name: "通用", exact: true }).click();
@@ -94,14 +89,14 @@ try {
     .getByRole("heading", { name: "Cage 环境已就绪", exact: true })
     .waitFor();
   await page
-    .getByRole("button", { name: "新建终端", exact: true })
-    .first()
+    .getByRole("button", { name: "在 design-lab 新建终端", exact: true })
     .click();
   await page.getByRole("menuitem", { name: "普通终端", exact: true }).click();
   await page.getByRole("tab", { name: "终端 1", exact: true }).waitFor();
   const terminalHeader = page.locator("header.chrome");
   assert.equal(await terminalHeader.locator(".navigation-row").count(), 0);
-  assert.equal(await terminalHeader.getByRole("button", { name: "新建终端", exact: true }).count(), 1);
+  assert.equal(await terminalHeader.getByRole("button", { name: "新建终端", exact: true }).count(), 0);
+  assert.equal(await terminalHeader.getByRole("button", { name: "打开文件", exact: true }).count(), 0);
   assert.equal(await terminalHeader.getByRole("button", { name: "design-lab", exact: true }).getAttribute("title"), state.chosenFolder);
   const terminalTab = page.getByRole("tab", { name: "终端 1", exact: true });
   const actions = page.getByRole("group", { name: "终端 1 的操作", exact: true });
@@ -110,7 +105,9 @@ try {
   await page.getByRole("button", { name: "工作台", exact: true }).hover();
   await actions.waitFor({ state: "hidden" });
   await terminalTab.focus();
-  await page.keyboard.press("Tab");
+  // WebKit's default keyboard mode skips buttons when tabbing. The tab's
+  // context-menu shortcut reaches its actions in that mode too.
+  await terminalTab.press(process.env.CAGE_TEST_BROWSER === "webkit" ? "Shift+F10" : "Tab");
   assert.equal(await page.locator(":focus").getAttribute("aria-label"), "置顶");
   await page.keyboard.press("Enter");
   await actions.getByRole("button", { name: "取消置顶", exact: true }).click();
@@ -154,14 +151,11 @@ try {
   assert.equal(await page.locator(".content-breadcrumb").count(), 0);
   await page.getByRole("button", { name: "新建网页", exact: true }).click();
   await tabs().getByRole("tab", { name: "新标签页", exact: true }).waitFor();
-  await tabs()
-    .getByRole("tab", { name: "新标签页", exact: true })
-    .locator("..")
-    .dragTo(
-      tabs()
-        .getByRole("tab", { name: "文件 · design-lab", exact: true })
-        .locator(".."),
-    );
+  const newTab = tabs().getByRole("tab", { name: "新标签页", exact: true });
+  const editorTab = tabs().getByRole("tab", { name: "文件 · design-lab", exact: true });
+  // Drop past the editor tab's midpoint to put the new tab before it.
+  await newTab.dragTo(editorTab, { targetPosition: { x: 5, y: 10 } });
+  await tabs().getByRole("tab").nth(1).and(newTab).waitFor();
   await page.reload();
   await page.getByRole("button", { name: "打开浏览器", exact: true }).click();
   assert.deepEqual(await tabs().getByRole("tab").allTextContents(), [
@@ -339,7 +333,7 @@ try {
     "两个项目终端各自归组、指定目录新建不受最后打开项目影响、浏览器与终端保持运行",
   );
   const deleteTab = page.getByRole("tab", { name: "终端 3", exact: true });
-  const remove = page.getByRole("group", { name: "终端 3 的操作" }).getByRole("button", { name: "删除" });
+  const remove = page.getByRole("group", { name: "终端 3 的操作" }).getByRole("button", { name: "关闭终端", exact: true });
   await deleteTab.hover();
   await remove.click();
   const confirmClose = page.getByRole("dialog", { name: "关闭这个终端会话？" });
@@ -350,7 +344,7 @@ try {
   await confirmClose.getByRole("button", { name: "关闭终端" }).click();
   await deleteTab.waitFor({ state: "detached" });
   assert.equal(state.terminals.length, 2);
-  checks.push("终端行悬停展开、键盘置顶、重命名、取消和确认删除指定终端");
+  checks.push("终端行悬停展开、键盘置顶、重命名、取消和确认关闭指定普通终端");
   await page.getByRole("button", { name: "工作台", exact: true }).click();
   await shot("main-minimum");
   await page.getByRole("button", { name: "收起侧栏", exact: true }).click();
@@ -371,7 +365,7 @@ try {
   );
   assert.deepEqual(errors, []);
   await fs.writeFile(
-    output + "smoke-result.json",
+    join(output, "smoke-result.json"),
     JSON.stringify(
       {
         passed: true,

@@ -23,7 +23,7 @@ install -m 644 docs/linux.md "$stage/usr/share/doc/claude-cage/README.md"
 install -m 755 packaging/linux/preinst "$stage/DEBIAN/preinst"
 install -m 755 packaging/linux/preinst "$stage/DEBIAN/prerm"
 # dpkg-shlibdeps derives glibc/GTK dependencies from the build distribution.
-# Use Debian 12 for releases; a newer build must not claim an older ABI.
+# Use Ubuntu 22.04 for releases; a newer build must not claim an older ABI.
 mkdir -p "$stage/debian"
 printf 'Source: claude-cage\nSection: devel\nPriority: optional\nMaintainer: Cage contributors <noreply@github.com>\n\nPackage: claude-cage\nArchitecture: amd64\nDescription: Cage desktop\n' > "$stage/debian/control"
 dependencies=$(cd "$stage" && dpkg-shlibdeps -O usr/lib/claude-cage/cage-desktop | sed -n 's/^shlibs:Depends=//p')
@@ -36,8 +36,8 @@ Section: devel
 Priority: optional
 Architecture: amd64
 Maintainer: Cage contributors <noreply@github.com>
-Depends: $dependencies, libwebkit2gtk-4.1-0 (>= 2.40), libglib2.0-bin, ca-certificates
-Suggests: qemu-system-x86, qemu-utils, ovmf, openssh-client, iproute2, git
+Depends: $dependencies, libwebkit2gtk-4.1-0 (>= 2.40), libglib2.0-bin, ca-certificates, systemd
+Suggests: qemu-system-x86, qemu-utils, ovmf, openssh-client, iproute2, git (>= 2.38)
 Recommends: dbus-user-session, fonts-noto-cjk, libnotify-bin, zenity | kdialog
 Homepage: https://github.com/Lee-xeo/Claude-Cage
 Description: Isolated coding workspace with a persistent Linux VM

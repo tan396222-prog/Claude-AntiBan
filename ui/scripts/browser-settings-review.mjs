@@ -1,0 +1,10 @@
+import { createSettingsWorkbench } from './browser-settings-fixture.mjs';
+const fixture = await createSettingsWorkbench({ launchOptions: { args: ['--remote-debugging-port=9233'] } });
+const { page } = fixture;
+await page.getByRole('button', { name: '打开浏览器', exact: true }).click();
+await page.getByRole('button', { name: '浏览器菜单', exact: true }).click();
+await page.getByRole('menuitem', { name: '设置', exact: true }).click();
+await page.getByRole('region', { name: '浏览器设置', exact: true }).waitFor();
+console.log('REVIEW_READY: isolated browser at http://127.0.0.1:9233; test site and APIs only; no user environment');
+process.on('SIGTERM', async () => { await fixture.close(); process.exit(0); });
+await new Promise(() => {});

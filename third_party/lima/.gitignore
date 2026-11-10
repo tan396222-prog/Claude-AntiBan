@@ -1,7 +1,0 @@
-_output/
-_artifacts/
-lima.REJECTED.yaml
-default-template.yaml
-schema-limayaml.json
-.config
-*.local.md

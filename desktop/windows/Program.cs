@@ -2,6 +2,7 @@ using System.IO.Pipes;
 using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
+using System.Text.Json;
 using System.Runtime.InteropServices;
 
 namespace Cage.Windows;
@@ -67,6 +68,12 @@ internal static class Program
             }
         });
         Application.Run(form); cancellation.Cancel();
-        return SmokeOutput == null || File.Exists(SmokeOutput) ? 0 : 1;
+        if (SmokeOutput == null) return 0;
+        try
+        {
+            using var report = JsonDocument.Parse(File.ReadAllText(SmokeOutput));
+            return report.RootElement.TryGetProperty("success", out var success) && success.ValueKind == JsonValueKind.True ? 0 : 1;
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or JsonException) { return 1; }
     }
 }

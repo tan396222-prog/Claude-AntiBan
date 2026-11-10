@@ -24,6 +24,9 @@ if (offline) {
   try {
     const version = fs.readFileSync("VERSION", "utf8").trim();
     const binary = path.join(stage, "cage");
+    for (const arch of ["amd64", "arm64"]) {
+      if (!fs.existsSync(path.resolve("internal/tailnetassets/assets/cage-tailnet-linux-" + arch + ".gz"))) throw Error("Build Tailscale guest assets before packaging the cloud kit");
+    }
     execFileSync("go", ["build", "-trimpath", "-ldflags", "-s -w -X github.com/sylvinus/agent-vm/internal/version.Version=" + version, "-o", binary, "./cmd/cage"], {
       env: {...process.env, CGO_ENABLED:"0", GOOS:"linux", GOARCH:"amd64"}, stdio:"inherit"
     });
@@ -39,6 +42,8 @@ if (offline) {
     fs.mkdirSync(recipe, {recursive:true});
     for (const name of ["Dockerfile.guest","restore-apt-sources.sh","build-guest.sh"])
       fs.copyFileSync(path.join("deploy/cloud",name),path.join(recipe,name));
+    fs.mkdirSync(path.join(stage,"internal/cage"),{recursive:true});
+    fs.copyFileSync("internal/cage/apt-bootstrap.sh",path.join(stage,"internal/cage/apt-bootstrap.sh"));
     for (const name of ["cage-server.service","cage-container-engine.service"])
       fs.copyFileSync(path.join("deploy/cloud",name),path.join(stage,name));
     const runtime = JSON.parse(fs.readFileSync("deploy/cloud/runtime-artifacts.json"));

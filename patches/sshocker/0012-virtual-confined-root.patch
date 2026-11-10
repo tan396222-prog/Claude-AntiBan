@@ -1,0 +1,137 @@
+diff --git a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -44,6 +44,10 @@
+ const maxHandles = 4096
+ 
+ func newRootedServer(rwc io.ReadWriteCloser, localPath string, readonly bool, readonlyNames []string) (*sftp.RequestServer, *rootedHandlers, error) {
++	return newRootedServerAt(rwc, localPath, slashPath(localPath), readonly, readonlyNames)
++}
++
++func newRootedServerAt(rwc io.ReadWriteCloser, localPath, exportedPath string, readonly bool, readonlyNames []string) (*sftp.RequestServer, *rootedHandlers, error) {
+ 	root, err := os.OpenRoot(localPath)
+ 	if err != nil {
+ 		return nil, nil, err
+@@ -54,7 +58,7 @@
+ 		return nil, nil, err
+ 	}
+ 	h := &rootedHandlers{
+-		rootPath:      slashPath(localPath),
++		rootPath:      exportedPath,
+ 		root:          root,
+ 		readonly:      readonly,
+ 		readonlyNames: readonlyNames,
+diff --git a/pkg/reversesshfs/serve.go b/pkg/reversesshfs/serve.go
+--- a/pkg/reversesshfs/serve.go
++++ b/pkg/reversesshfs/serve.go
+@@ -13,3 +13,16 @@
+ 	defer server.Close()
+ 	return server.Serve()
+ }
++
++// ServeConfinedVirtual exposes the selected directory at / without disclosing
++// its host path. All reads, writes and Guard decisions use the same confined
++// root and metadata protections as ServeConfined.
++func ServeConfinedVirtual(transport io.ReadWriteCloser, localPath string, readonly bool, readonlyNames []string) error {
++	server, root, err := newRootedServerAt(transport, localPath, "/", readonly, readonlyNames)
++	if err != nil {
++		return err
++	}
++	defer root.Close()
++	defer server.Close()
++	return server.Serve()
++}
+diff --git a/pkg/reversesshfs/serve_virtual_test.go b/pkg/reversesshfs/serve_virtual_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/reversesshfs/serve_virtual_test.go
+@@ -0,0 +1,89 @@
++package reversesshfs
++
++import (
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/pkg/sftp"
++)
++
++func TestServeConfinedVirtualRootAndRevocation(t *testing.T) {
++	directory := t.TempDir()
++	outside := t.TempDir()
++	if err := os.WriteFile(filepath.Join(directory, "hello.txt"), []byte("live project"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Mkdir(filepath.Join(directory, ".git"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(directory, ".git", "config"), []byte("protected"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("private"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	symlink := os.Symlink(outside, filepath.Join(directory, "escape")) == nil
++	serverSide, clientSide := net.Pipe()
++	_ = serverSide.SetDeadline(time.Now().Add(5 * time.Second))
++	_ = clientSide.SetDeadline(time.Now().Add(5 * time.Second))
++	done := make(chan struct{})
++	go func() { defer close(done); _ = ServeConfinedVirtual(serverSide, directory, false, []string{".git"}) }()
++	client, err := sftp.NewClientPipe(clientSide, clientSide)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer client.Close()
++	defer serverSide.Close()
++	actual, err := client.RealPath(".")
++	if err != nil || actual != "/" {
++		t.Fatalf("virtual root exposed host: %q %v", actual, err)
++	}
++	f, err := client.Open("/hello.txt")
++	if err != nil {
++		t.Fatal(err)
++	}
++	data, err := io.ReadAll(f)
++	f.Close()
++	if err != nil || string(data) != "live project" {
++		t.Fatalf("read %q %v", data, err)
++	}
++	temp, err := client.Create("/atomic.tmp")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = temp.Write([]byte("atomic save")); err != nil {
++		t.Fatal(err)
++	}
++	temp.Close()
++	if err = client.PosixRename("/atomic.tmp", "/saved.txt"); err != nil {
++		t.Fatal(err)
++	}
++	if data, err = os.ReadFile(filepath.Join(directory, "saved.txt")); err != nil || string(data) != "atomic save" {
++		t.Fatalf("atomic save %q %v", data, err)
++	}
++	if f, err := client.Create("/.git/config"); err == nil {
++		f.Close()
++		t.Fatal("protected metadata writable")
++	}
++	if symlink {
++		if f, err := client.Open("/escape/secret.txt"); err == nil {
++			f.Close()
++			t.Fatal("root symlink escaped")
++		}
++	}
++	if f, err := client.Open(filepath.ToSlash(filepath.Join(outside, "secret.txt"))); err == nil {
++		f.Close()
++		t.Fatal("absolute host path escaped")
++	}
++	if err = serverSide.Close(); err != nil {
++		t.Fatal(err)
++	}
++	<-done
++	if _, err = client.Create("/after-revoke"); err == nil {
++		t.Fatal("revoked transport writable")
++	}
++}

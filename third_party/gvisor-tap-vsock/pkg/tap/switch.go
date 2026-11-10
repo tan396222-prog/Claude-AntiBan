@@ -33,6 +33,8 @@ type NetworkSwitch interface {
 }
 
 type Switch struct {
+	droppedIPv6 func([]byte)
+
 	Sent     uint64
 	Received uint64
 
@@ -59,6 +61,9 @@ func NewSwitch(debug bool) *Switch {
 		cam:   make(map[tcpip.LinkAddress]int),
 	}
 }
+
+// SetDroppedIPv6 is configured before Accept, only for an IPv4-only stack.
+func (e *Switch) SetDroppedIPv6(observe func([]byte)) { e.droppedIPv6 = observe }
 
 func (e *Switch) CAM() map[string]int {
 	e.camLock.RLock()
@@ -275,7 +280,15 @@ func (e *Switch) rxBuf(_ context.Context, id int, buf []byte) {
 		log.Info(packet.String())
 	}
 
+	if len(buf) < header.EthernetMinimumSize {
+		return
+	}
 	eth := header.Ethernet(buf)
+	if e.droppedIPv6 != nil && eth.Type() == header.IPv6ProtocolNumber {
+		e.droppedIPv6(buf[header.EthernetMinimumSize:])
+		atomic.AddUint64(&e.Received, uint64(len(buf)))
+		return
+	}
 
 	e.camLock.Lock()
 	_, exists := e.cam[eth.SourceAddress()]

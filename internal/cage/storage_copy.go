@@ -16,9 +16,27 @@ import (
 // Copy cold VM disks without expanding their zero-filled regions. Hash the
 // written copy independently before switching any path used by the runtime.
 func copyStorage(ctx context.Context, source, target string, report func(int64, int64)) error {
+	return copyStorageExcluding(ctx, source, target, nil, report)
+}
+
+func copyStorageExcluding(ctx context.Context, source, target string, excluded []string, report func(int64, int64)) error {
 	var total, copied int64
 	var last time.Time
+	skip := func(path string) bool {
+		for _, managed := range excluded {
+			if StorageContains(managed, path) {
+				return true
+			}
+		}
+		return false
+	}
 	err := filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+		if skip(path) {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -50,6 +68,12 @@ func copyStorage(ctx context.Context, source, target string, report func(int64, 
 		}
 	}
 	err = filepath.WalkDir(source, func(path string, d fs.DirEntry, err error) error {
+		if skip(path) {
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if err != nil {
 			return err
 		}

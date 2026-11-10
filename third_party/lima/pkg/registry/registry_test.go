@@ -64,19 +64,19 @@ func TestRegister(t *testing.T) {
 	ctx := t.Context()
 	mockDrv := newMockDriver("test-driver")
 	mockDrv2 := newMockDriver("test-driver-2")
-	Register(ctx, mockDrv)
-	Register(ctx, mockDrv2)
+	Register(ctx, func() driver.Driver { return mockDrv })
+	Register(ctx, func() driver.Driver { return mockDrv2 })
 
 	assert.Equal(t, len(internalDrivers), 2)
-	assert.Equal(t, internalDrivers["test-driver"], mockDrv)
-	assert.Equal(t, internalDrivers["test-driver-2"], mockDrv2)
+	assert.Equal(t, internalDrivers["test-driver"](), mockDrv)
+	assert.Equal(t, internalDrivers["test-driver-2"](), mockDrv2)
 
 	// Test registering duplicate driver (should not overwrite)
 	mockDrv3 := newMockDriver("test-driver")
-	Register(ctx, mockDrv3)
+	Register(ctx, func() driver.Driver { return mockDrv3 })
 
 	assert.Equal(t, len(internalDrivers), 2)
-	assert.Equal(t, internalDrivers["test-driver"], mockDrv)
+	assert.Equal(t, internalDrivers["test-driver"](), mockDrv)
 
 	driverType := CheckInternalOrExternal("test-driver")
 	assert.Equal(t, driverType, Internal)
@@ -188,13 +188,18 @@ func TestRegisterDriverFile(t *testing.T) {
 func TestGet(t *testing.T) {
 	BackupRegistry(t)
 
-	mockDrv := newMockDriver("internal-test")
-	Register(t.Context(), mockDrv)
+	Register(t.Context(), func() driver.Driver { return newMockDriver("internal-test") })
 
 	extDriver, intDriver, exists := Get("internal-test")
 	assert.Equal(t, exists, true)
 	assert.Assert(t, extDriver == nil)
-	assert.Equal(t, intDriver, mockDrv)
+	assert.Equal(t, intDriver.Info(t.Context()).Name, "internal-test")
+
+	_, secondDriver, exists := Get("internal-test")
+	assert.Equal(t, exists, true)
+	assert.Assert(t, secondDriver != intDriver)
+	intDriver.(*mockDriver).Name = "first-instance-only"
+	assert.Equal(t, secondDriver.Info(t.Context()).Name, "internal-test")
 
 	registerExternalDriver("external-test", "/path/to/external")
 
@@ -216,8 +221,7 @@ func TestList(t *testing.T) {
 	vmTypes := List()
 	assert.Equal(t, len(vmTypes), 0)
 
-	mockDrv := newMockDriver("internal-test")
-	Register(t.Context(), mockDrv)
+	Register(t.Context(), func() driver.Driver { return newMockDriver("internal-test") })
 
 	vmTypes = List()
 	assert.Equal(t, len(vmTypes), 1)
@@ -239,6 +243,6 @@ func BackupRegistry(t *testing.T) {
 		internalDrivers = originalInternalDrivers
 	})
 
-	internalDrivers = make(map[string]driver.Driver)
+	internalDrivers = make(map[string]func() driver.Driver)
 	ExternalDrivers = make(map[string]*ExternalDriver)
 }

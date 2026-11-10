@@ -31,6 +31,10 @@ done
 xdpyinfo -display "$DISPLAY" >/dev/null
 openbox --config-file /etc/claude-cage/desktop-openbox.xml &
 X0tigervnc -display "$DISPLAY" -rfbport -1 -rfbunixpath "$XDG_RUNTIME_DIR/vnc.sock" -rfbunixmode 0600 -SecurityTypes VncAuth -PasswordFile "$XDG_RUNTIME_DIR/vnc-password" -AlwaysShared &
+# Lower the refresh rate of unattended animation. Optional on older guests.
+if [ -x /usr/local/bin/cage-display-governor ]; then
+  /usr/local/bin/cage-display-governor &
+fi
 mkfifo -m 0600 "$XDG_RUNTIME_DIR/unlock"
 gnome-keyring-daemon --unlock --components=secrets < "$XDG_RUNTIME_DIR/unlock" >/dev/null
 rm "$XDG_RUNTIME_DIR/unlock"
@@ -45,8 +49,35 @@ for i in $(seq 1 50); do
 done
 keyring_unlocked || { echo '无法解锁已有密钥环，登录数据未修改。' >&2; exit 1; }
 touch "$XDG_RUNTIME_DIR/keyring-ready"
-# RemoteView displays two framebuffer pixels per CSS pixel, as for Chromium.
-# Scale the application's layout too so controls retain their intended size.
+# Record the running application's density for clients that reconnect later.
+display_scale=2
+if [[ -r /etc/claude-cage/display-scale && $(< /etc/claude-cage/display-scale) == 1.5 ]]; then
+  display_scale=1.5
+fi
+printf '%s\n' "$display_scale" > "$XDG_RUNTIME_DIR/display-scale"
+printf '%s\n' "$display_scale" > "$XDG_RUNTIME_DIR/base-display-scale"
+scale_args=(--force-device-scale-factor="$display_scale")
+if command -v xsettingsd >/dev/null; then
+  dpi=$(awk -v scale="$display_scale" 'BEGIN {printf "%.0f", scale * 96 * 1024}')
+  # Cage owns the embedded app's window controls; keep its native buttons hidden.
+  printf 'Xft/DPI %s\nGdk/WindowScalingFactor 1\nGdk/UnscaledDPI %s\nGtk/DecorationLayout ":"\n' "$dpi" "$dpi" > "$XDG_RUNTIME_DIR/xsettings.conf"
+  xsettingsd --config="$XDG_RUNTIME_DIR/xsettings.conf" &
+  printf '%s\n' "$!" > "$XDG_RUNTIME_DIR/xsettings.pid"
+  /usr/bin/python3 - <<'CAGE_DESKTOP_DPI_READY'
+import time
+from Xlib import display
+connection = display.Display()
+selection = connection.intern_atom('_XSETTINGS_S0')
+for attempt in range(60):
+    if connection.get_selection_owner(selection):
+        break
+    time.sleep(.05)
+else:
+    raise RuntimeError('Desktop display settings unavailable')
+connection.close()
+CAGE_DESKTOP_DPI_READY
+  scale_args=()
+fi
 /usr/local/bin/cage-desktop-files &
 files_pid=$!
 for i in $(seq 1 100); do
@@ -56,7 +87,9 @@ for i in $(seq 1 100); do
 done
 test -S "$XDG_RUNTIME_DIR/files.sock"
 export GTK_USE_PORTAL=1
-/usr/local/bin/cage-input-session claude-desktop --force-device-scale-factor=2 --xdg-portal-required-version=3 &
+# Openbox is not auto-detected as a libsecret desktop by Electron. Select the
+# unlocked keyring explicitly so OAuth tokens survive application restarts.
+/usr/local/bin/cage-input-session claude-desktop "${scale_args[@]}" --password-store=gnome-libsecret --xdg-portal-required-version=3 &
 app_pid=$!
 # The service becomes ready only after the application has opened a window.
 for i in $(seq 1 200); do

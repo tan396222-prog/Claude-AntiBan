@@ -10,7 +10,7 @@ internal sealed class WindowChrome(Color background, Color foreground, bool dark
     internal static Color ContrastingText(Color value) =>
         value.GetBrightness() < 0.5 ? Color.White : Color.Black;
 
-    internal void Apply(IntPtr window, MenuStrip menus)
+    internal void Apply(IntPtr window, MenuStrip? menus)
     {
         bool accessible = SystemInformation.HighContrast;
         int darkFrame = dark && !accessible ? 1 : 0;
@@ -23,9 +23,15 @@ internal sealed class WindowChrome(Color background, Color foreground, bool dark
             DwmSetWindowAttribute(window, 36, ref text, sizeof(int));    // DWMWA_TEXT_COLOR
         }
 
+        if (menus != null) ApplyMenu(menus);
+    }
+
+    internal void ApplyMenu(ToolStrip menu)
+    {
+        bool accessible = SystemInformation.HighContrast;
         ToolStripRenderer renderer = accessible ? new ToolStripSystemRenderer()
             : new MenuRenderer(background, foreground);
-        ApplyMenu(menus, renderer, accessible);
+        ApplyMenu(menu, renderer, accessible);
     }
 
     private void ApplyMenu(ToolStrip menu, ToolStripRenderer renderer, bool accessible)
@@ -56,7 +62,27 @@ internal sealed class WindowChrome(Color background, Color foreground, bool dark
         {
             if (!e.Item.Selected && !e.Item.Pressed) return;
             using var brush = new SolidBrush(highlight);
-            e.Graphics.FillRectangle(brush, new Rectangle(Point.Empty, e.Item.Size));
+            var bounds = new Rectangle(Point.Empty, e.Item.Size);
+            if (e.ToolStrip is ToolStripDropDown)
+            {
+                bounds.Inflate(-2, -1);
+                e.Graphics.FillRoundedRectangle(brush, bounds, new Size(5, 5));
+            }
+            else e.Graphics.FillRectangle(brush, bounds);
+        }
+
+        protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e)
+        {
+            using var pen = new Pen(highlight);
+            int y = e.Item.Height / 2;
+            e.Graphics.DrawLine(pen, 10, y, e.Item.Width - 10, y);
+        }
+
+        protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e)
+        {
+            if (e.ToolStrip is not ToolStripDropDown) return;
+            using var pen = new Pen(highlight);
+            e.Graphics.DrawRectangle(pen, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
         }
 
         protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e)

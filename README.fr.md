@@ -8,7 +8,7 @@
 
 [![Release](https://img.shields.io/github/v/release/tan396222-prog/Claude-AntiBan?include_prereleases)](https://github.com/tan396222-prog/Claude-AntiBan/releases) [![CI](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-**[Site Web du projet](https://github.com/tan396222-prog/Claude-AntiBan) · [Français](https://github.com/tan396222-prog/Claude-AntiBan) · [Télécharger l’application](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [Commencer](docs/getting-started.md) · [FAQ](docs/troubleshooting.md) · [Contribuer](CONTRIBUTING.md) · [Guide d’utilisation (chinois)](docs/README.md)**
+**[Site Web du projet](https://github.com/tan396222-prog/Claude-AntiBan) · [Télécharger l’application](https://github.com/tan396222-prog/Claude-AntiBan/releases) · [Commencer](docs/getting-started.md) · [FAQ](docs/troubleshooting.md) · [Guide d’utilisation (chinois)](docs/README.md)**
 
 [简体中文](README.md) · [繁體中文](README.zh-TW.md) · [Русский](README.ru.md) · [العربية](README.ar.md) · [فارسی](README.fa.md) · [한국어](README.ko.md) · [Español](README.es.md) · [မြန်မာဘာသာ](README.my.md) · [Беларуская](README.be.md) · [پښتو](README.ps.md) · [دری](README.prs.md) · [አማርኛ](README.am.md) · [Soomaali](README.so.md) · [ትግርኛ](README.ti.md) · [Français](README.fr.md)
 
@@ -18,7 +18,7 @@
 
 En tant qu'utilisateurs ordinaires qui souhaitent simplement parler et collaborer avec Claude, nous en avons assez de configurer des instances VPS, des profils d'empreintes digitales de navigateur et des contrôles d'environnement, tout en nous inquiétant des interdictions de compte et des pertes financières. Nous présentons **Claude 防封** — **une application de bureau prête à l'emploi : configurez votre propre proxy réseau et gérez votre environnement isolé, votre fuseau horaire, votre langue et vos contrôles d'environnement en un seul endroit.**
 
-Claude 防封 est une machine virtuelle Linux légère qui combine un terminal Linux, un navigateur et un éditeur de fichiers dans une seule application de bureau. Ses principales caractéristiques comprennent :
+Claude 防封 réunit terminal, navigateur, éditeur et Claude Desktop officiel dans un même espace de travail isolé. Utilisez une machine virtuelle macOS sur Mac, Windows sur un PC compatible, ou un environnement Linux léger. Partagez les projets de votre choix, gérez le réseau séparément, connectez votre serveur par SSH et poursuivez vos tâches depuis votre téléphone. Ses principales fonctions :
 
 - Paramètres réseau isolés de l'hôte ; Cage achemine tout le trafic réseau à l'intérieur de son environnement via son propre proxy réseau
 - Paramètres d'empreinte digitale du navigateur isolés de l'hôte, y compris le fuseau horaire et la langue, avec synchronisation automatique avec l'emplacement IP du proxy réseau
@@ -38,12 +38,14 @@ Claude 防封 est une machine virtuelle Linux légère qui combine un terminal L
 ## Ce que vous pouvez faire avec Cage
 
 - **Travaillez dans une seule fenêtre.** Exécutez Claude Code dans le terminal, examinez les modifications dans l'éditeur et utilisez le navigateur Cage pour prévisualiser les services et vous connecter.
+- **Développez dans votre système habituel.** Choisissez un système invité macOS, Windows ou Linux avec ses outils, ou clonez le système hôte pour créer un environnement indépendant et propre. [Choisir le système invité](docs/guide/guest-systems.md)
 - **Contrôlez ce que vous partagez.** Seuls l'espace de travail par défaut et les dossiers de projet explicitement ouverts sont partagés. L'état de connexion Claude de l'hôte, les profils de navigateur et les clés SSH ne sont pas importés automatiquement.
 - **Consultez l'état de votre réseau.** La gestion intégrée du proxy réseau vous permet d'importer des abonnements, de sélectionner des points de terminaison et de vérifier l'adresse IP de sortie. L'environnement reste hors ligne jusqu'à ce que les vérifications critiques soient réussies. Si le proxy réseau n'est pas disponible, il n'est pas possible de recourir à une connexion directe.
 - **Continuez la prochaine fois.** Les outils, les fichiers et l'état de connexion persistent sur le disque virtuel. Les tâches en arrière-plan peuvent continuer à s'exécuter lorsque vous fermez la fenêtre.
-- **Gérez plusieurs comptes Claude Code.** Attribuez un compte à chaque nouveau terminal Claude et consultez les quotas sur 5 heures et 7 jours. Les terminaux en cours ne changent pas automatiquement de compte.
-- **Continuez depuis votre téléphone.** Le client mobile de développement se connecte à l’ordinateur pour les sessions CLI structurées et les approbations d’outils ; le navigateur distant exige une autorisation distincte. Le client mobile doit être compilé depuis les sources et ne prend pas le contrôle de n’importe quel terminal ordinaire.
+- **Gérez plusieurs comptes Claude Code.** Consultez les quotas, attribuez les comptes aux nouvelles sessions et, avec une autorisation explicite, changez de compte en conservant l’historique. [Claude Code](docs/guide/accounts.md)
+- **Poursuivez depuis votre téléphone.** Associez Android ou iPhone à l’ordinateur par QR code ou code d’association. Retrouvez les mêmes conversations Claude Code, envoyez des messages, approuvez les outils et utilisez le navigateur distant ou la fenêtre Claude Desktop de l’ordinateur.
 - **Exécutez Cage dans le cloud.** Connectez-vous par SSH à Cage déployé sur un VPS Linux x86_64 compatible, sans KVM. Les données et la sortie réseau restent sur le serveur.
+- **Connectez-vous par un réseau privé.** Connectez Tailscale dans Cage pour accéder par SSH à l’hôte et à l’environnement dans les deux sens. [Tailscale / SSH](docs/guide/tailscale.md)
 
 ## Démarrage rapide
 
@@ -57,17 +59,19 @@ Tout ce dont vous avez besoin est un point de terminaison proxy réseau fiable. 
 
 ## Téléchargement et installation
 
-Cage prend en charge macOS, Windows et Linux : Apple Silicon avec macOS 14+, Windows 10 22H2 / 11 x64 et Debian 12 / Ubuntu 24.04 x86_64. Windows et Linux sont encore en cours de validation. Consultez les notes de version pour les paquets disponibles, les signatures et les tests réalisés. Intel Mac, Windows ARM64 et Linux ARM64 ne sont pas encore pris en charge. [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
+Cage prend en charge macOS, Windows et Linux : Apple Silicon avec macOS 14+, Windows 10 22H2 / 11 x64 et Debian 12 / Ubuntu 22.04 / 24.04 x86_64. Intel Mac, Windows ARM64 et Linux ARM64 ne sont pas encore pris en charge. [macOS](docs/getting-started.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
 
 1. Télécharger l’application: [macOS / Windows / Linux](https://github.com/tan396222-prog/Claude-AntiBan/releases).
 2. macOS: Ouvrez le package d'installation et faites glisser **Cage** dans **Applications**; puis lancez-le depuis Applications. Windows: [Guide d’installation](docs/windows.md#安装并开始工作) · Linux: [Guide d’installation](docs/linux.md#安装并开始工作).
 3. Suivez les instructions de l'application pour configurer votre propre proxy réseau, démarrer l'environnement et ouvrir un projet.
 
-Le programme d'installation comprend le workbench et le noyau du proxy réseau. Une utilisation quotidienne ne nécessite pas l'installation de Go, Node.js, Docker ou Clash. Le premier lancement nécessite toujours une connexion Internet pour télécharger l’image Linux et les outils de développement. Cage ne fournit ni service proxy réseau ni compte Claude.
+L’installateur comprend l’espace de travail et le moteur de proxy. Inutile d’installer Go, Node.js, Docker ou Clash au préalable. À la création, choisissez le système invité et son emplacement, puis préparez l’image officielle et les outils. Cage ne fournit ni licence de système, ni service proxy, ni compte Claude.
 
-Consultez les [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases) pour les versions publiques. Le code source, le site Web et les versions sont publics. Reportez-vous aux notes de chaque version pour la signature du programme d'installation, la notarisation Apple et la portée de la validation. L'installation sur une machine propre, la compatibilité sur les Mac physiques exécutant macOS 14, l'autorisation réelle du compte Claude et les demandes de modèle nécessitent toujours une validation complète.
+Le code source et les installateurs sont publics. Consultez les notes et les sommes de contrôle dans [Releases](https://github.com/tan396222-prog/Claude-AntiBan/releases).
 
-Les mises à jour macOS et Windows passent par le proxy choisi, sans connexion directe de secours. Enregistrez et arrêtez les tâches avant l’installation. macOS exige une signature Developer ID du même éditeur et la vérification Apple ; Windows exige une signature Authenticode de confiance et la même clé publique de l’éditeur. La version préliminaire Windows non signée et Linux se mettent à jour manuellement. [Mise à jour et désinstallation](docs/getting-started.md#升级与卸载).
+Les fonctions dépendent de la compilation utilisée ; les fonctions et les vérifications de l’installateur public sont précisées dans les notes de version.
+
+macOS et les versions Windows signées se mettent à jour via le proxy choisi. La préversion Windows non signée et Linux utilisent l’installateur manuellement. Enregistrez et arrêtez les tâches avant la mise à jour ; les données personnelles sont conservées. [Mise à jour et désinstallation](docs/guide/maintenance.md)
 
 ## Commencez en trois étapes
 
@@ -77,7 +81,7 @@ Sur la page d'accueil, cliquez sur « Configurer le réseau et le proxy », pu
 
 ### 2. Démarrez l'environnement
 
-Revenez à l’atelier et cliquez sur « Démarrer l’environnement Cage ». Si la configuration Git de l'hôte nécessite une protection de sécurité, l'application explique d'abord les effets. Appliquez-le en cliquant sur « Activer la protection et continuer ». Les commits et les pulls pour les projets ordinaires ne sont pas affectés. Cage télécharge ensuite l'image, installe les outils et exécute des vérifications du réseau. Consultez la progression sous « Détails de l’opération ». Une fois l’environnement prêt et les vérifications critiques réussies, vous pouvez travailler en ligne. Si une vérification échoue, suivez les instructions pour résoudre le problème et réessayez.
+À la première création, choisissez le système invité ou le clonage du système hôte, puis le stockage. Démarrez l’environnement Cage et suivez l’installation et les autorisations. La progression et les erreurs figurent dans les détails de l’opération. Les lancements suivants réutilisent le même environnement.
 
 ### 3. Ouvrez un projet et exécutez Claude
 
@@ -85,12 +89,12 @@ Cliquez sur « Ouvrir le projet » pour sélectionner un dossier sur votre ordin
 
 ## Comprendre ces limites avant utilisation
 
-- Les modifications et suppressions dans les projets partagés affectent directement les fichiers sur votre ordinateur. Utilisez le contrôle de version ou les sauvegardes. `.git` et les autres métadonnées sont en lecture seule par défaut ; effectuer les commits Git sur l’ordinateur hôte.
-- Tous les projets partagent un environnement Cage, y compris ses outils, ses comptes et son système de fichiers Linux. Les projets ne sont pas isolés les uns des autres.
-- L'invité a actuellement accès au TCP IPv4 public via le proxy réseau, le DNS étant envoyé via le même proxy. Les connexions publiques UDP, IPv6, ICMP et initiées par l'invité à l'hôte ou au réseau local sont bloquées. Les outils qui dépendent de ces capacités peuvent ne pas fonctionner.
+- Les modifications et suppressions dans les projets partagés affectent directement les fichiers sur votre ordinateur. Utilisez le contrôle de version ou les sauvegardes. Le dossier `.git` du projet est accessible en lecture et en écriture ; vous pouvez préparer des modifications, créer des commits et changer de branche dans Cage.
+- Tous les projets partagent un environnement Cage, y compris ses outils, ses comptes et son système de fichiers macOS / Windows / Debian / Ubuntu 22.04. Les projets ne sont pas isolés les uns des autres.
+- Par défaut, les sorties publiques prennent en charge IPv4 TCP et DNS passe par le même proxy. UDP, IPv6, ICMP publics et les accès directs à l’hôte ou au réseau local sont limités. En activant Tailscale, les accès aux appareils suivent les règles du réseau privé.
 - Les vérifications du réseau montrent la configuration actuelle et des échantillons de preuves. Ils ne peuvent pas garantir qu’un compte évitera les restrictions de la plateforme et ne remplacent pas un audit complet de sécurité de la virtualisation.
 
-Pour plus de détails, voir [Limites du réseau et des données](docs/getting-started.md#网络与数据边界), [Conception de contrôles de réseau](docs/design/network-checks.md) et [Conception de proxy réseau intégré](docs/design/managed-proxy.md).
+Pour plus de détails, voir [Limites du réseau et des données](docs/getting-started.md#网络与数据边界).
 
 ## Documentation et contributions
 
@@ -98,18 +102,19 @@ Pour l'index complet, voir [Index des documents](docs/README.md).
 
 | Votre tâche | Commencez ici |
 |---|---|
+| macOS / Windows / Debian / Ubuntu 22.04 | [Choisir le système invité](docs/guide/guest-systems.md) |
 | Installez, configurez un proxy réseau et ouvrez votre premier projet | [Commencer](docs/getting-started.md) |
 | Dépanner les téléchargements, le démarrage, la connectivité et la connexion | [FAQ et récupération](docs/troubleshooting.md) |
 | Apprenez les commandes du clavier, l'apparence, la persistance des données et le comportement de sortie | [Utilisation quotidienne](docs/getting-started.md#日常使用) |
-| Construire à partir des sources ou apporter des améliorations | [Guide de contribution](CONTRIBUTING.md) |
-| Comprendre les responsabilités du module et les contraintes du réseau | [Conception d'établi](docs/design/workbench.md) |
 | Signaler un problème reproductible | [GitHub Issues](https://github.com/tan396222-prog/Claude-AntiBan/issues) |
+
+Le projet évolue rapidement. Rejoignez le groupe communautaire pour partager vos commentaires ; les responsables de la communauté sont les bienvenus.
 
 ## Origines et licences
 
-La cage est dérivée de [agent-vm](https://github.com/sylvinus/agent-vm) ; la ligne de base en amont est `652688aae92c35ce536b9be52262e1cc5ec6e03a`.
+La cage est dérivée de [agent-vm](https://github.com/sylvinus/agent-vm).
 
-La licence principale du projet est [MIT](LICENSE). Les composants groupés conservent leurs licences respectives. Mihomo est distribué sous forme d'exécutable distinct sous GPL-3.0. Voir aussi [NOTICE](NOTICE), [Licences tierces](THIRD_PARTY_LICENSES), [Sources tierces](third_party/SOURCES) et [provenance noVNC](ui/vendor/novnc/README.cage.md). La description du projet en amont est conservée dans le [README en amont](docs/agent-vm-upstream.md).
+La licence principale du projet est [MIT](LICENSE). Les composants groupés conservent leurs licences respectives. Mihomo est distribué sous forme d'exécutable distinct sous GPL-3.0. Voir aussi [NOTICE](NOTICE) · [Licences tierces](THIRD_PARTY_LICENSES) · [noVNC](ui/vendor/novnc/LICENSE.txt)。
 
 Cage est un projet communautaire indépendant et n'est pas affilié à Anthropic.
 
@@ -126,3 +131,4 @@ Merci aux projets suivants pour leurs capacités fondamentales et leurs référe
 - [code-server](https://github.com/coder/code-server): l'éditeur de code basé sur un navigateur.
 - [AIO Sandbox](https://github.com/agent-infra/sandbox): références pour l'environnement de travail et le design d'interaction.
 - [claude-switcher](https://github.com/YOURSJEYO/claude-switcher) et [Claude-Guardian](https://github.com/DUNHKpcc/Claude-Guardian): références pour les vérifications du réseau et les diagnostics de sécurité.
+

@@ -7,13 +7,16 @@ import re
 import socket
 import sys
 
-directory = Path.home() / '.cache' / 'cage-input'
+directory = (Path('/run/cage-phone-desktop/input') if os.environ.get('CAGE_PHONE_DESKTOP_INPUT') == '1'
+             else Path.home() / '.cache' / 'cage-input')
 socket_path = directory / 'input.sock'
 limit = 32768
 
 
 def request():
     data = sys.stdin.buffer.readline(limit + 1)
+    if not data:
+        raise EOFError
     if len(data) > limit or not data.endswith(b'\n'):
         raise ValueError('Invalid input request')
     with socket.socket(socket.AF_UNIX) as client:
@@ -24,13 +27,29 @@ def request():
     if len(result) > limit or not result.endswith(b'\n'):
         raise ValueError('Invalid input response')
     sys.stdout.buffer.write(result)
+    sys.stdout.buffer.flush()
 
 
 if __name__ == '__main__' and sys.argv[1:] == ['--request']:
     try:
         request()
-    except (OSError, ValueError):
+    except (OSError, ValueError, EOFError):
         print('{"available":false}')
+    sys.exit(0)
+
+if __name__ == '__main__' and sys.argv[1:] == ['--relay']:
+    # One authorized caller sends consecutive requests, one line each, without
+    # starting a process for every caret poll. Its closed pipe ends the relay.
+    while True:
+        try:
+            request()
+        except EOFError:
+            break
+        except OSError:
+            print('{"available":false}', flush=True)
+        except ValueError:
+            # The stream has no boundary to resume from.
+            sys.exit(1)
     sys.exit(0)
 
 import gi
@@ -155,9 +174,13 @@ if not bus.is_connected():
 
 class Factory(IBus.Factory):
     def do_create_engine(self, name):
-        engine = Engine(connection=bus.get_connection(),
-                        object_path='/org/freedesktop/IBus/Cage/' + str(len(engines)),
-                        has_focus_id=True)
+        options = dict(connection=bus.get_connection(),
+                       object_path='/org/freedesktop/IBus/Cage/' + str(len(engines)))
+        # Ubuntu 22.04's IBus uses the original per-context focus signals.
+        # Newer IBus can reuse engines and supplies the explicit focus ID.
+        if IBus.Engine.find_property('has-focus-id') is not None:
+            options['has_focus_id'] = True
+        engine = Engine(**options)
         engines.append(engine)
         return engine
 
@@ -191,6 +214,21 @@ def utf16_index(text, offset):
 def apply(value):
     engine = active
     mode = value.get('mode')
+    if mode in ('phone-status', 'phone-text', 'phone-char') and os.environ.get('CAGE_PHONE_DESKTOP_INPUT') == '1':
+        if engine is None or not engine.reachable or not engine.context:
+            return {'available': False}
+        password = engine.purpose in (8, 9)
+        if mode == 'phone-status':
+            return {'available': True, 'context': engine.context, 'password': password}
+        text = value.get('text', '')
+        if engine.context != value.get('context') or not isinstance(text, str) or not text:
+            return {'available': False}
+        if mode == 'phone-text' and (password or len(text.encode()) > 8192):
+            return {'available': False}
+        if mode == 'phone-char' and (len(text) != 1 or not (' ' <= text <= '~')):
+            return {'available': False}
+        engine.commit_text(IBus.Text.new_from_string(text))
+        return {'available': True}
     if mode == 'status':
         if engine is not None and engine.session and value.get('session') == engine.session:
             engine.updated = time.monotonic()
@@ -272,7 +310,10 @@ class Handler(socketserver.StreamRequestHandler):
 
             def probe():
                 engine = active
-                if probe_ready and value.get('mode') in ('status', 'begin') and engine is not None and engine.purpose not in (8, 9):
+                desktop_probe = (os.environ.get('CAGE_PHONE_DESKTOP_INPUT') == '1' and
+                                 value.get('mode') in ('phone-status', 'phone-text', 'phone-char'))
+                ordinary_probe = value.get('mode') in ('status', 'begin') and engine is not None and engine.purpose not in (8, 9)
+                if probe_ready and engine is not None and (desktop_probe or ordinary_probe):
                     engine.probing = True
                     engine.probe_seen = False
                     subprocess.Popen(['xdotool', 'key', '--delay', '0', 'F24'],

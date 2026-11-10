@@ -1,0 +1,145 @@
+.mac-login-fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  isolation: isolate;
+  background: #131519;
+  color: white;
+}
+.mac-login-panel { position: absolute; inset: 0; }
+.mac-login-fullscreen[data-mode="login"] {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: #0008;
+}
+[data-mode="login"] .mac-login-panel {
+  position: relative;
+  inset: auto;
+  width: min(680px, 100%);
+  height: min(560px, calc(100dvh - 32px));
+  overflow: hidden;
+  border: 1px solid #ffffff32;
+  border-radius: 16px;
+  background: #17191e;
+  box-shadow: 0 24px 80px #0006;
+  display: flex;
+  flex-direction: column;
+}
+.mac-login-heading { padding: 20px 20px 12px; }
+.mac-login-heading h2 { margin: 0; color: #fff; font-size: 18px; line-height: 1.4; }
+.mac-login-heading p { margin: 6px 0 0; color: #ffffffb3; font-size: 13px; line-height: 1.5; }
+.mac-login-stage {
+  position: absolute;
+  inset: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  outline: none;
+  touch-action: none;
+}
+.mac-login-canvas {
+  display: grid;
+  place-items: center;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.mac-login-canvas img {
+  display: block;
+  max-width: none;
+  max-height: none;
+  -webkit-user-drag: none;
+}
+.mac-login-stage[data-zoom="account"] .mac-login-canvas { cursor: grab; }
+.mac-login-stage[data-zoom="account"]:active .mac-login-canvas { cursor: grabbing; }
+.mac-login-tools {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid #ffffff32;
+  border-radius: 12px;
+  background: #17191eee;
+  box-shadow: 0 2px 10px #0003;
+}
+.mac-login-tools button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  margin: 0;
+  padding: 4px 10px;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+}
+.mac-login-tools button:hover,
+.mac-login-tools button[aria-pressed="true"] { background: #ffffff24; }
+.mac-login-tools button:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+.mac-login-status {
+  position: absolute;
+  top: 55px;
+  left: 12px;
+  max-width: calc(100% - 24px);
+  color: #fff;
+  background: #17191eee;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+/* WebKit's Edit > Paste needs an editable first responder. Input is forwarded
+   to the guest one key at a time; the field never holds the guest password. */
+.mac-login-keyboard {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mac-login-tools { max-width: calc(100% - 24px); flex-wrap: wrap; }
+[data-mode="login"] .mac-login-tools {
+  position: relative;
+  top: auto;
+  left: auto;
+  align-self: flex-start;
+  flex-shrink: 0;
+  margin: 0 12px 12px;
+  box-shadow: none;
+}
+[data-mode="login"] .mac-login-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+[data-mode="login"] .mac-login-status { top: auto; bottom: 40px; }
+.mac-login-help { margin: 0; padding: 10px 16px; color: #ffffffb3; font-size: 12px; line-height: 1.5; text-align: center; }
+.mac-login-password { display: inline-flex; align-items: center; padding: 4px 8px; font-family: monospace; overflow-wrap: anywhere; }
+.mac-setup-hint { position: absolute; bottom: 12px; left: 12px; z-index: 1; max-width: calc(100% - 24px); margin: 0; padding: 8px 12px; border-radius: 8px; color: #fff; background: #17191eee; font-size: 13px; pointer-events: none; }
+.mac-first-setup { align-items: safe center; }
+.mac-first-setup .welcome-content { width: min(100%, 700px); text-align: left; }
+.mac-first-setup ol { padding-left: 24px; line-height: 1.6; }
+.mac-first-setup li + li { margin-top: 10px; }
+.mac-setup-hint p { margin: 0; }
+.mac-setup-hint p + p { margin-top: 4px; }
+.mac-login-fullscreen[data-mode="maintenance"] { display: grid; place-items: center; padding: 16px; background: #0008; }
+[data-mode="maintenance"] .mac-login-panel { position: relative; inset: auto; display: flex; flex-direction: column; width: min(1100px, 100%); height: min(900px, calc(100dvh - 32px)); overflow: hidden; border: 1px solid #ffffff32; border-radius: 16px; background: #17191e; }
+[data-mode="maintenance"] .mac-login-tools { position: relative; inset: auto; align-self: flex-start; flex-shrink: 0; margin: 0 12px 8px; box-shadow: none; }
+[data-mode="maintenance"] .mac-login-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+[data-mode="maintenance"] .mac-setup-hint { position: relative; inset: auto; pointer-events: auto; margin: 0 12px 8px; }
+[data-mode="maintenance"] .mac-login-status { position: relative; inset: auto; flex-shrink: 0; margin: 8px 12px; }
+.project-recovery-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }

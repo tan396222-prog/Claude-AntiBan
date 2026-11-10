@@ -1,0 +1,20 @@
+--- a/pkg/networks/usernet/gvproxy.go
++++ b/pkg/networks/usernet/gvproxy.go
+@@ -53,6 +53,9 @@
+ // guests of the per-instance netstacks may reach (types.Configuration.Outbound).
+ // The host services the guest needs (AllowHostService) are reached past it.
+ var Outbound types.Outbound
++
++// DroppedIPv6 is an optional observer for the instance-owned IPv4-only guest link.
++var DroppedIPv6 func([]byte)
+ 
+ // GuestDial and DNSExchange are host-owned transport hooks.
+ var GuestDial types.DialContext
+@@ -142,6 +145,7 @@
+ 		},
+ 		GatewayVirtualIPs: []string{gatewayIP},
+ 		Outbound:          outbound,
++		DroppedIPv6:       DroppedIPv6,
+ 		DialContext:       dialGuest,
+ 		DNSExchange:       DNSExchange,
+ 		DNSNames:          Names,

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'Build on x86_64 Linux (Debian 12 baseline).' >&2; exit 1; }
+[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || { echo 'Build on x86_64 Linux (Ubuntu 22.04 baseline).' >&2; exit 1; }
 case "${1:-}" in ''|--prebuilt-backend) ;; *) echo 'Usage: scripts/build-linux.sh [--prebuilt-backend]' >&2; exit 2 ;; esac
 version=$(tr -d '\r\n' < VERSION)
 [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || { echo 'Invalid VERSION.' >&2; exit 1; }
@@ -16,6 +16,7 @@ else
   [[ -x _output/bin/cage ]] || { echo 'Missing prebuilt Linux backend.' >&2; exit 1; }
   _output/bin/cage help >/dev/null
 fi
+_output/bin/cage verify-web-assets
 mkdir -p _output/linux-amd64
 stage=$(mktemp -d "$PWD/_output/linux-amd64/build.XXXXXX")
 trap 'rm -rf "$stage"' EXIT

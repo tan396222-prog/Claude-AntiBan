@@ -192,8 +192,8 @@ func TestLocationProvidersLiveIntegration(t *testing.T) {
 			manual.ExitPolicy = policy
 			manual.Timezone, manual.Locale, manual.BrowserLanguage = "Asia/Shanghai", "zh_CN.UTF-8", "zh-CN"
 			loc, err := probeEnvironmentLocation(context.Background(), manual, Preferences{})
-			if err != nil || loc.IP == "" || loc.Timezone != "" || loc.CountryCode != "" {
-				t.Fatal("manual settings required geolocation or lost measured exit", err)
+			if err != nil || loc.IP == "" || loc.Timezone == "" || loc.CountryCode == "" {
+				t.Fatal("manual settings skipped mandatory country evidence", err)
 			}
 			if manual.Timezone != "Asia/Shanghai" || manual.Locale != "zh_CN.UTF-8" || manual.BrowserLanguage != "zh-CN" {
 				t.Fatal("manual settings changed during probe")
@@ -242,15 +242,16 @@ func TestLocationProvidersLiveIntegration(t *testing.T) {
 			t.Fatal("manual mode was not applied")
 		}
 	})
-	for _, provider := range []struct {
-		name, url string
-		primary   bool
-	}{
-		{"primary", "https://ipwho.is/8.8.8.8?fields=success,ip,country,country_code,region,region_code,city,timezone.id", true},
-		{"backup", "https://api.ip.sb/geoip/8.8.8.8", false},
-	} {
-		t.Run(provider.name, func(t *testing.T) {
-			if _, err := queryLocation(context.Background(), client, provider.url, provider.primary, net.ParseIP("8.8.8.8")); err != nil {
+	for _, host := range []string{"ipwho.is", "api.ip.sb"} {
+		t.Run(host, func(t *testing.T) {
+			only := *client
+			only.Transport = browserTransport(func(r *http.Request) (*http.Response, error) {
+				if r.URL.Host != host {
+					return nil, errors.New("only testing " + host)
+				}
+				return transport.RoundTrip(r)
+			})
+			if _, err := lookupLocation(context.Background(), &only, net.ParseIP("8.8.8.8")); err != nil {
 				t.Fatal(err)
 			}
 		})

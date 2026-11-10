@@ -1,0 +1,8 @@
+{
+  "name": "cage-windows-ccs-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@kaitranntt/ccs": "8.11.0"
+  }
+}

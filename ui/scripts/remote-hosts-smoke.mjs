@@ -43,16 +43,15 @@ try {
   await page.getByLabel("SSH 用户名", { exact: true }).fill("cage-test");
   const auth = page.getByRole("combobox", { name: "SSH 登录方式" });
   const keyField = page.getByLabel("本机私钥文件", { exact: true });
-  // The centered dialog itself moves when its height changes. Compare gaps
-  // inside the dialog to check whether the list takes up layout space.
+  // Opening the floating list keeps both the dialog and its fields in place.
   const gap = async () => (await keyField.boundingBox()).y - (await auth.boundingBox()).y;
   const before = await gap();
   await auth.click();
   await page.getByRole("option", { name: "本机 SSH agent" }).waitFor();
   const expanded = await keyField.boundingBox();
-  assert.ok(await gap() > before + 30, "inline choices must push subsequent fields down");
+  assert.ok(Math.abs(await gap() - before) < 1, "floating choices must not move subsequent fields");
   const list = await page.getByRole("listbox").boundingBox();
-  assert.ok(list.y + list.height <= expanded.y, "choices must not cover the next field");
+  assert.ok(list.height > 0 && Math.abs(expanded.y - (await keyField.boundingBox()).y) < 1);
   await auth.press("Escape");
   assert.equal(await auth.getAttribute("aria-expanded"), "false");
   await page.getByRole("listbox").waitFor({state:"hidden"});

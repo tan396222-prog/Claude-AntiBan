@@ -86,5 +86,38 @@ export async function readClipboardContent() {
   return { text: await navigator.clipboard.readText() };
 }
 
-export const sendImage = (payload, target, id) =>
-  api("/input/image", { ...payload, target, id });
+export function prepareClipboardPaste(target, id, { windowTarget, valid = () => true } = {}) {
+  let disposed = false, sent = false;
+  const destination = { target, id, pid: windowTarget?.pid, window: windowTarget?.window };
+  const check = () => {
+    if (disposed || !valid()) throw new Error("粘贴接收位置已切换，请重新粘贴");
+  };
+  const prepared = api("/input/paste/start", destination).then(result => {
+    if (result?.available !== true || typeof result.transfer !== "string" && typeof result.context !== "string")
+      throw new Error("客机尚未确认粘贴接收位置，请同步环境组件后重试");
+    return { transfer: result.transfer, context: result.context };
+  });
+  // Source reading starts independently. A sender using this binding observes
+  // preparation errors, and every content path disposes its preparation.
+  void prepared.catch(() => {});
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    void prepared.then(binding => api("/input/paste/cancel", { ...destination, ...binding })).catch(() => {});
+  };
+  return {
+    async send(payload) {
+      check();
+      const binding = await prepared;
+      check();
+      if (sent) throw new Error("本次粘贴已经提交，请核对接收结果");
+      sent = true;
+      try { return await api(typeof payload.text === "string" ? "/input/text" : "/input/image", { ...payload, ...destination, ...binding }); }
+      finally { dispose(); }
+    },
+    dispose,
+  };
+}
+
+export const sendImage = (payload, target, id, options = {}) =>
+  (options.prepared || prepareClipboardPaste(target, id, options)).send(payload);

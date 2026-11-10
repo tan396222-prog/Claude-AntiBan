@@ -25,11 +25,13 @@ export DEBIAN_FRONTEND=noninteractive
 # stdin (dpkg asking about a changed config file, an npm install script)
 # would swallow the lines after it, which then never run.
 apt_get() {
-  local status before=''
+  local status before='' retries=3 timeout=60
   if [[ "${CLAUDE_CAGE:-}" == 1 ]]; then
     before="$(awk '$1 == "oom_kill" {print $2}' /proc/vmstat)"
+    retries=1
+    timeout=15
   fi
-  if sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=60 -o Acquire::https::Timeout=60 "$@" </dev/null; then
+  if sudo env DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries="$retries" -o Acquire::http::Timeout="$timeout" -o Acquire::https::Timeout="$timeout" "$@" </dev/null; then
     return 0
   else
     status=$?
@@ -154,11 +156,12 @@ echo '$nrconf{restart} = '"'"'a'"'"';' | sudo tee /etc/needrestart/conf.d/no-pro
 echo "Installing base packages..."
 if [[ "${CLAUDE_CAGE:-}" == 1 ]]; then
   # This runs in the guest, through its configured DNS and proxy-only route.
-  echo "Checking guest DNS for Debian packages..."
+  package_host=$(. /etc/os-release; if [ "$ID" = ubuntu ]; then printf '%s' archive.ubuntu.com; else printf '%s' deb.debian.org; fi)
+  echo "Checking guest DNS for system packages..."
   if ! timeout 15 getent ahostsv4 mirrors.nju.edu.cn >/dev/null &&
      ! timeout 15 getent ahostsv4 mirrors.ustc.edu.cn >/dev/null &&
-     ! timeout 15 getent ahostsv4 deb.debian.org >/dev/null; then
-    echo 'Guest DNS could not resolve the Debian download sources. Check Cage Network & Proxy / DNS settings, apply and retry.' >&2
+     ! timeout 15 getent ahostsv4 "$package_host" >/dev/null; then
+    echo 'Guest DNS could not resolve the system download sources. Check Cage Network & Proxy / DNS settings, apply and retry.' >&2
     exit 1
   fi
 fi
@@ -259,9 +262,11 @@ if [[ "$INSTALL_DOCKER" == "1" ]]; then
   # Install Docker from official repo (includes docker compose)
   echo "Installing Docker..."
   sudo install -m 0755 -d /etc/apt/keyrings
-  install_repository_key https://download.docker.com/linux/debian/gpg /etc/apt/keyrings/docker.asc
+  docker_distribution=$(. /etc/os-release && printf '%s' "$ID")
+  case "$docker_distribution" in debian|ubuntu) ;; *) echo "Unsupported Docker distribution: $docker_distribution" >&2; exit 1;; esac
+  install_repository_key "https://download.docker.com/linux/$docker_distribution/gpg" /etc/apt/keyrings/docker.asc
   sudo chmod a+r /etc/apt/keyrings/docker.asc
-  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+  echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/$docker_distribution $(. /etc/os-release && echo "$VERSION_CODENAME") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
   apt_get update
   # buildx and pigz are Recommends: `docker build` needs buildx, pigz speeds
   # up layer decompression. docker-ce-rootless-extras is left out: the user is
@@ -293,11 +298,17 @@ if [[ "$INSTALL_CHROMIUM" == "1" ]]; then
   # xauth: xvfb-run needs it, and it is only a Recommends of xvfb.
   # fonts-dejavu-core: with Liberation alone, fontconfig resolves the generic
   # sans-serif and serif to Liberation Mono.
-  chromium_packages=(chromium fonts-liberation fonts-dejavu-core xvfb xauth)
-  if [[ "${CLAUDE_CAGE:-}" == 1 ]]; then
-    cage_cache_chromium --no-install-recommends "${chromium_packages[@]}"
+  # Disposable browser contexts use the application locale's language defaults.
+  # Debian ships the non-English locale resources in this separate package.
+  if [[ "${CLAUDE_CAGE:-}" == 1 ]] && cage_is_ubuntu; then
+    cage_install_chromium
+  else
+    chromium_packages=(chromium chromium-l10n fonts-liberation fonts-dejavu-core xvfb xauth)
+    if [[ "${CLAUDE_CAGE:-}" == 1 ]]; then
+      cage_cache_chromium --no-install-recommends "${chromium_packages[@]}"
+    fi
+    apt_get install -y --no-install-recommends "${chromium_packages[@]}"
   fi
-  apt_get install -y --no-install-recommends "${chromium_packages[@]}"
   sudo ln -sf /usr/bin/chromium /usr/bin/google-chrome
   sudo ln -sf /usr/bin/chromium /usr/bin/google-chrome-stable
   sudo mkdir -p /opt/google/chrome
@@ -345,7 +356,8 @@ if [[ "$HAS_CLAUDE" == "1" ]]; then
   cat << 'JSON' | sudo tee /etc/claude-code/managed-settings.json > /dev/null
 {
   "permissions": { "defaultMode": "bypassPermissions" },
-  "tui": "fullscreen"
+  "tui": "fullscreen",
+  "channelsEnabled": true
 }
 JSON
 fi

@@ -8,7 +8,7 @@ import {
   LoaderCircle,
   ArrowUpRight,
   Copy,
-  Settings2,
+  Settings,
   ChevronDown,
 } from "lucide-react";
 import { api, writeClipboard } from "./api";
@@ -120,6 +120,12 @@ export function SafetyPanel({
       }
     >
       <div className="modal-body safety-body">
+        {safety.macos_exit_candidate?.ip && <button disabled={busy} onClick={async () => {
+          const ip = safety.macos_exit_candidate.ip;
+          if (!(await onConfirm({ title: "绑定固定出口？", body: `客机终端、浏览器和代理均测得 ${ip}。保存后请重启客机并重新检测。`, confirm: "绑定固定出口" }))) return;
+          try { await api("/macos/exit-policy", { ip }); setNotice("固定出口已提交，请在保存完成后重启客机并重新检测。"); }
+          catch (e) { setError(e.message); }
+        }}>绑定检测到的固定出口 {safety.macos_exit_candidate.ip}</button>}
         <div className={`safety-summary ${network.mode}`}>
           {online ? (
             <ShieldCheck size={27} />
@@ -134,14 +140,14 @@ export function SafetyPanel({
               {busy
                 ? status.job.message
                 : online
-                  ? "关键检查已通过，后台继续核对出口规则与环境配置。"
-                  : safety.error ||
+                  ? status.network_error || "关键检查已通过，后台继续核对出口规则与环境配置。"
+                  : status.network_error || safety.error ||
                     safety.gate?.reason ||
                     "完成关键检查后，才允许连接外部网站。"}
             </p>
           </div>
           <button className="text-button" onClick={() => onSettings("network")}>
-            <Settings2 size={15} />
+            <Settings size={15} />
             出口规则
           </button>
         </div>

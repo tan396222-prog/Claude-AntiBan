@@ -2,6 +2,18 @@
 // The debugger permission maps CDP target IDs to Chrome tab IDs. We never
 // attach a debugger through the extension or accept messages from webpages.
 const targetsByTab = new Map();
+globalThis.manageCageExtensions = async function (input) {
+  const items = (await chrome.management.getAll()).filter(item => item.id !== chrome.runtime.id && item.type === 'extension');
+  if (input.mode === 'list') return { items: items.map(({ id, name, description, version, enabled, mayDisable, optionsUrl, permissions, hostPermissions, installType }) =>
+    ({ id, name, description, version, enabled, mayDisable, optionsUrl, permissions, hostPermissions, installType })) };
+  const entry = items.find(item => item.id === input.id);
+  if (!entry) throw new Error('扩展不存在');
+  if (input.mode === 'options') return { url: entry.optionsUrl || '' };
+  if (!entry.mayDisable) throw new Error('此扩展由浏览器管理');
+  if (!['enable', 'disable'].includes(input.mode)) throw new Error('扩展操作无效');
+  await chrome.management.setEnabled(input.id, input.mode === 'enable');
+  return { ok: true };
+};
 let managedSplit;
 const faviconVersions = new Map();
 chrome.tabs.onUpdated.addListener((tabId, changes) => {

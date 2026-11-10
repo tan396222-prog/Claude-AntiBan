@@ -12,6 +12,8 @@ const root = fileURLToPath(new URL('../', import.meta.url));
 const pin = JSON.parse(await readFile(new URL('../packaging/windows/signing.json', import.meta.url), 'utf8'));
 const configPath = 'conf/code_sign_tool.properties';
 const secretNames = ['CAGE_ESIGNER_PASSWORD', 'CAGE_ESIGNER_TOTP_SECRET'];
+const providerCodes = ['server_error', 'invalid_grant', 'invalid_client', 'access_denied', 'unauthorized', 'invalid_request', 'invalid_otp', 'malware_detected'];
+const rejectedOrUncertain = /timeout|timed out|abort|cancel|invalid_grant|invalid_client|access_denied|unauthorized|(?:otp|totp|authentication|authorization|credential|password)[^\n]*(?:invalid|expired|failed|rejected)|(?:invalid|expired|failed|rejected)[^\n]*(?:otp|totp|authentication|credential|password)/i;
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const toolDirectory = () => resolve(process.env.CAGE_ESIGNER_TOOL_DIR || join(root, '_output/esigner', `CodeSignTool-v${pin.version}`));
 
@@ -124,7 +126,19 @@ export async function invokeJava({ java = 'java', jar, config, arguments: args, 
     if (otpError) throw otpError;
     const output = redact(`${stdout}\n${stderr}`, knownSecrets);
     if (code !== 0 || /\b(?:Error:|Exception|Missing required option|Unmatched argument)/u.test(output)) {
-      throw new Error(`CodeSignTool failed (exit ${code}). ${output.slice(-2500).trim()}`);
+      let privateLog = '';
+      try { privateLog = await readFile(join(temp, 'logs', 'code_signing_tool.log'), 'utf8'); } catch { /* Optional diagnostic only. */ }
+      const stages = { getMalwareScanResponse: 'malware-scan', getScanSettingsResponse: 'scan-settings', getCredentialsAuthorize: 'credentials-authorize', signHash: 'sign-hash', isOtpTypeOnline: 'otp-type', sendOtp: 'send-otp', getCredentialInfo: 'credentials-info', getCredentialIDs: 'credentials-list' };
+      const method = /^\s*at com\.ssl\.code\.signing\.tool\.csc\.CscApi\.(getMalwareScanResponse|getScanSettingsResponse|getCredentialsAuthorize|signHash|isOtpTypeOnline|sendOtp|getCredentialInfo|getCredentialIDs)\(/m.exec(privateLog)?.[1];
+      const failureStage = stages[method] || 'unknown';
+      const rawCode = /"error"\s*:\s*"([a-z_]+)"/.exec(output)?.[1];
+      const providerCode = providerCodes.includes(rawCode) ? rawCode : 'unclassified';
+      const quotaExceeded = /QuotaExceededError/.test(privateLog + output);
+      // Never attach the raw response or vendor log to the exception. These
+      // fixed classifications are the only diagnostic values leaving memory.
+      throw Object.assign(new Error(`CodeSignTool failed (exit ${code}). stage=${failureStage}; error=${providerCode}; quotaExceeded=${quotaExceeded}.`), {
+        failureStage, providerCode, quotaExceeded, nonRetryable: quotaExceeded || rejectedOrUncertain.test(output),
+      });
     }
     return output;
   } finally {
@@ -168,18 +182,46 @@ async function credentials() {
   return { username, password, credential, totp: process.env.CAGE_ESIGNER_TOTP_SECRET };
 }
 
+// A provider-declared server error is a definite failure. Timeouts, OTP and
+// authentication errors are not retried. Any output proceeds to the caller's
+// existing Authenticode verification; it must never trigger another signature.
+export async function invokeSigning({ invoke, outputPath, pause = ms => new Promise(done => setTimeout(done, ms)) }) {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try { return await invoke(); }
+    catch (error) {
+      try { await access(outputPath); return ''; }
+      catch (outputError) { if (outputError.code !== 'ENOENT') throw error; }
+      const uncertainOrRejected = error.nonRetryable || error.quotaExceeded || rejectedOrUncertain.test(error.message) || /QuotaExceededError/.test(error.message);
+      const serverError = error.providerCode === 'server_error' || /"error"\s*:\s*"server_error"/.test(error.message);
+      if (attempt === 2 || uncertainOrRejected || !/^CodeSignTool failed \(exit 11\)/.test(error.message) || !serverError) throw error;
+      console.error(`Signing service returned server_error; retrying in ${(attempt + 1) * 15} seconds.`);
+      await pause((attempt + 1) * 15000);
+    }
+  }
+}
+
+// Diagnostic output is an allowlist. Never return vendor JSON, identities,
+// certificate data, tokens or free-form error messages to CI logs.
+export function credentialDiagnostic(error) {
+  if (!error) return { operation: 'credential_info', success: true, stage: 'csc-credential-info', exitCode: 0, error: '' };
+  const match = /^CodeSignTool failed \(exit ([0-9]{1,3})\)/.exec(error.message);
+  const exitCode = match && Number(match[1]) <= 255 ? Number(match[1]) : null;
+  const code = error.providerCode || /"error"\s*:\s*"([a-z_]+)"/.exec(error.message)?.[1];
+  return { operation: 'credential_info', success: false, stage: exitCode === 1 ? 'oauth-token' : exitCode === 2 ? 'csc-credential-info' : 'client', exitCode, error: providerCodes.includes(code) ? code : 'unclassified' };
+}
+
 async function main(argv) {
   const [command, input, flag, destination] = argv;
   if (command === 'install' && argv.length === 1) { console.log(`Verified CodeSignTool ${pin.version}: ${await installTool()}`); return; }
-  if (!['info', 'sign'].includes(command) || (command === 'info' && argv.length !== 1) ||
+  if (!['info', 'diagnose', 'sign'].includes(command) || (['info', 'diagnose'].includes(command) && argv.length !== 1) ||
     (command === 'sign' && (argv.length !== 4 || flag !== '--output-dir'))) {
-    throw new Error('Usage: node scripts/esigner.mjs install | info | sign INPUT.exe --output-dir DIRECTORY');
+    throw new Error('Usage: node scripts/esigner.mjs install | info | diagnose | sign INPUT.exe --output-dir DIRECTORY');
   }
   if (command === 'sign') await assertWindowsExecutable(resolve(input));
   const directory = await installTool();
   const auth = await credentials();
   if (command === 'sign' && !auth.totp && !process.stdin.isTTY) throw new Error('Non-interactive signing requires CAGE_ESIGNER_TOTP_SECRET.');
-  const args = [command === 'info' ? 'credential_info' : 'sign', `-username=${auth.username}`, `-password=${auth.password}`, `-credential_id=${auth.credential}`];
+  const args = [command === 'sign' ? 'sign' : 'credential_info', `-username=${auth.username}`, `-password=${auth.password}`, `-credential_id=${auth.credential}`];
   let staged, output, vendor;
   try {
     if (command === 'sign') {
@@ -193,21 +235,24 @@ async function main(argv) {
       args.push(`-input_file_path=${vendor.path}`, `-output_dir_path=${vendor.output}`);
       if (auth.totp) args.push(`-totp_secret=${auth.totp}`);
     }
-    const result = await invokeJava({ jar: join(directory, pin.jar), config: join(directory, configPath), arguments: args,
+    const invoke = () => invokeJava({ jar: join(directory, pin.jar), config: join(directory, configPath), arguments: args,
       otp: signal => prompt('Current six-digit authenticator code', true, signal), secrets: [auth.password, auth.totp] });
+    const result = command === 'sign' ? await invokeSigning({ invoke, outputPath: join(vendor.output, basename(vendor.path)) }) : await invoke();
     if (command === 'sign') {
       const signed = join(vendor.output, basename(vendor.path));
       const bytes = await readFile(signed);
       if (!bytes.length || hash(bytes) === hash(await readFile(resolve(input)))) throw new Error('CodeSignTool did not produce a changed signed file.');
       await copyFile(signed, output, (await import('node:fs')).constants.COPYFILE_EXCL);
       console.log(`Signed copy: ${output}\nWindows trust and publisher verification are still required.`);
-    } else console.log(result.trim());
+    } else if (command === 'diagnose') console.log(JSON.stringify(credentialDiagnostic()));
+    else console.log(result.trim());
   } finally { if (staged) await rm(staged, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   main(process.argv.slice(2)).catch(error => {
-    console.error(redact(error.message, secretNames.map(name => process.env[name])));
+    if (process.argv[2] === 'diagnose') console.error(JSON.stringify(credentialDiagnostic(error)));
+    else console.error(redact(error.message, secretNames.map(name => process.env[name])));
     process.exitCode = 1;
   });
 }

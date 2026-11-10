@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <UseWPF>true</UseWPF>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <AssemblyName>Cage.GuestClipboard</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="../../../internal/workbench/cli_channel.py" LogicalName="Cage.CliChannel" />
+    <EmbeddedResource Include="../../../internal/cage/claude-account.py" LogicalName="Cage.CliAccount" />
+    <EmbeddedResource Include="../../../internal/workbench/windows_cli_platform.py" LogicalName="Cage.CliPlatform" />
+    <EmbeddedResource Include="../../../internal/workbench/windows_ccs_launch.cjs" LogicalName="Cage.CliCCS" />
+    <EmbeddedResource Include="../../../internal/workbench/mobile_cli_identity.py" LogicalName="Cage.CliIdentity" />
+    <EmbeddedResource Include="../../../internal/workbench/cli_channel.resume.md" LogicalName="Cage.CliResume" />
+    <EmbeddedResource Include="../../../internal/workbench/claude_account_resume.md" LogicalName="Cage.CliAccountResume" />
+  </ItemGroup>
+</Project>

@@ -5,11 +5,14 @@ package executil
 
 import (
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 var (
 	ForegroundSysProcAttr = &syscall.SysProcAttr{}
 	BackgroundSysProcAttr = &syscall.SysProcAttr{
-		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+		HideWindow:    true,
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP | windows.CREATE_NO_WINDOW,
 	}
 )

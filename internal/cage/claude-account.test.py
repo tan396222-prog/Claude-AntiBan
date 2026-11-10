@@ -30,11 +30,14 @@ class ClaudeAccountTests(unittest.TestCase):
         # Emulate the documented status shape of the official CLI. Its response
         # deliberately includes fields that must never cross the guest boundary.
         fake.write_text("""#!/bin/sh
+original_settings="$2"
+if [ "$1" = --settings ]; then shift 2; fi
 if [ "$1" = auth ] && [ "$2" = status ]; then
   method=claude.ai; if [ -n "$ANTHROPIC_API_KEY" ]; then method=api_key; fi
   printf '{"configDirectory":"%s","authMethod":"%s","apiProvider":"%s","loggedIn":true,"email":"%s","orgId":"test-org","subscriptionType":"pro","access_token":"must-not-appear"}' "${TEST_CONFIG_RESULT:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}" "$method" "${TEST_PROVIDER:-firstParty}" "$TEST_EMAIL"
   exit 0
 fi
+if [ -n "$original_settings" ]; then printf '%s\\n' --settings "$original_settings"; fi
 printf '%s\\n' "$@"
 """)
         fake.chmod(0o700)
@@ -97,12 +100,12 @@ printf '%s\\n' "$@"
     def test_cli_arguments_and_existing_statusline(self):
         args = self.run_helper("run", FIRST, "--model", "sonnet").stdout.splitlines()
         self.assertEqual(args[-2:], ["--model", "sonnet"])
-        self.assertIn("statusline " + FIRST, json.loads(args[1])["statusLine"]["command"])
+        self.assertIn("autoMemoryDirectory", json.loads(Path(args[1]).read_text()))
         config = self.home / ".local/share/cage/claude-accounts" / FIRST / "config"
         original = '{"statusLine":{"type":"command","command":"my-original-status"}}'
         (config / "settings.json").write_text(original)
         args = self.run_helper("run", FIRST, "--model", "sonnet").stdout.splitlines()
-        self.assertEqual(args, ["--model", "sonnet"])
+        self.assertEqual(args[-2:], ["--model", "sonnet"])
         self.assertEqual((config / "settings.json").read_text(), original)
 
     def test_default_reuses_the_existing_configuration_and_pin(self):
@@ -133,6 +136,73 @@ printf '%s\\n' "$@"
             self.assertEqual(snap({**self.env, **override}), {"logged_in": False})
         unknown = self.run_helper("snapshot", "default", env={**self.env, "TEST_CONFIG_RESULT": str(self.home / "different")}, check=False)
         self.assertNotEqual(unknown.returncode, 0)
+
+    def test_local_skills_instructions_and_memory_share_without_credentials(self):
+        with patch.dict(os.environ,self.env,clear=True),patch.object(helper.Path,"cwd",return_value=self.home):
+            common=self.home/".claude"
+            (common/"skills/local-skill").mkdir(parents=True)
+            (common/"skills/local-skill/SKILL.md").write_text("local instructions")
+            (common/"skills/synced").mkdir()
+            (common/"skills/synced/remote.md").write_text("account-specific download")
+            (common/"CLAUDE.md").write_text("global preferences")
+            for account in (FIRST,SECOND):
+                base=helper.profile(account);config=helper.config_directory(base);config.mkdir(parents=True)
+                (config/".credentials.json").write_text(account)
+                helper.shared_profile_resources(base)
+                self.assertEqual((config/"skills/local-skill/SKILL.md").read_text(),"local instructions")
+                self.assertFalse((config/"skills/synced").exists())
+                self.assertEqual((config/"CLAUDE.md").read_text(),"global preferences")
+                flags=helper.shared_launch_arguments(base,["--model","sonnet"])
+                memory=Path(json.loads(Path(flags[1]).read_text())["autoMemoryDirectory"])
+                if account==FIRST:(memory/"MEMORY.md").write_text("project learning")
+                self.assertEqual((memory/"MEMORY.md").read_text(),"project learning")
+                self.assertEqual((config/".credentials.json").read_text(),account)
+            (common/"skills/local-skill/SKILL.md").write_text("updated once")
+            self.assertEqual((helper.config_directory(helper.profile(FIRST))/"skills/local-skill/SKILL.md").read_text(),"updated once")
+
+    def test_conflicting_shared_resource_preserves_both_versions(self):
+        with patch.dict(os.environ,self.env,clear=True):
+            base=helper.profile(FIRST);config=helper.config_directory(base);config.mkdir(parents=True)
+            common=self.home/".claude";common.mkdir()
+            (common/"CLAUDE.md").write_text("global")
+            (config/"CLAUDE.md").write_text("account")
+            (config/"commands").mkdir()
+            (config/"commands/keep.md").write_text("retain the original layout on conflict")
+            with self.assertRaises(ValueError):helper.shared_profile_resources(base)
+            self.assertEqual((common/"CLAUDE.md").read_text(),"global")
+            self.assertEqual((config/"CLAUDE.md").read_text(),"account")
+            self.assertFalse((config/"commands").is_symlink())
+            self.assertEqual((config/"commands/keep.md").read_text(),"retain the original layout on conflict")
+            failure=self.run_helper("run",FIRST,check=False)
+            self.assertIn("同名冲突",failure.stderr)
+
+    def test_existing_project_memory_is_backed_up_and_remains_shared(self):
+        with patch.dict(os.environ,self.env,clear=True),patch.object(helper.Path,"cwd",return_value=self.home):
+            base=helper.profile(FIRST)
+            key=helper.re.sub(r"[^a-zA-Z0-9]","-",str(self.home.resolve()))
+            original=helper.config_directory(base)/"projects"/key/"memory"
+            original.mkdir(parents=True)
+            (original/"MEMORY.md").write_text("account learning")
+            flags=helper.shared_launch_arguments(base,[])
+            memory=Path(json.loads(Path(flags[1]).read_text())["autoMemoryDirectory"])
+            self.assertEqual((memory/"MEMORY.md").read_text(),"account learning")
+            self.assertTrue(original.is_symlink())
+            backup=self.home/".local/share/cage/claude-shared/backups"/FIRST/"projects"/key/"memory/MEMORY.md"
+            self.assertEqual(backup.read_text(),"account learning")
+            self.assertTrue(Path(flags[1]).is_relative_to(base))
+
+    def test_mobile_settings_remain_anonymous_when_adding_shared_defaults(self):
+        with patch.dict(os.environ,self.env,clear=True),patch.object(helper.Path,"cwd",return_value=self.home),tempfile.TemporaryFile() as snapshot:
+            snapshot.write(json.dumps({"env":{"ANTHROPIC_AUTH_TOKEN":"fixture-private"}}).encode())
+            snapshot.flush()
+            snapshot.seek(0)
+            base=helper.profile(FIRST)
+            flags=helper.shared_launch_arguments(base,["--settings","/dev/fd/"+str(snapshot.fileno())],snapshot.fileno())
+            self.assertEqual(flags,["--settings","/dev/fd/"+str(snapshot.fileno())])
+            settings=json.load(snapshot)
+            self.assertEqual(settings["env"]["ANTHROPIC_AUTH_TOKEN"],"fixture-private")
+            self.assertIn("autoMemoryDirectory",settings)
+            self.assertFalse((base/"launch-settings").exists())
 
     def test_cancel_login_closes_browser_even_when_cli_fails(self):
         env = {**self.env}

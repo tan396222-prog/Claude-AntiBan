@@ -7,6 +7,7 @@ if ! command -v ibus-daemon >/dev/null || ! /usr/bin/python3 -c 'import gi; gi.r
 fi
 umask 077
 input_root="$HOME/.cache/cage-input"
+if [ "${CAGE_PHONE_DESKTOP_INPUT:-}" = 1 ]; then input_root=/run/cage-phone-desktop/input; fi
 mkdir -p "$input_root"
 chmod 700 "$input_root"
 export IBUS_ADDRESS="unix:path=$input_root/bus"

@@ -9,6 +9,113 @@ function Invoke-BuildTool {
     if ($LASTEXITCODE -ne 0) { throw "$Tool failed with exit code $LASTEXITCODE" }
 }
 
+function Get-WindowsWorkbenchTestBase {
+    if ($env:RUNNER_TEMP) { return [IO.Path]::GetFullPath($env:RUNNER_TEMP) }
+    return [IO.Path]::GetTempPath()
+}
+
+function Invoke-InIsolatedTestTemp {
+    param([Parameter(Mandatory)][scriptblock]$Checks)
+    # Windows' default temp is inside AppData, which must remain protected
+    # against project sharing. Put test projects in the runner's own temp.
+    $directory = Join-Path (Get-WindowsWorkbenchTestBase) ('cage-go-tests-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $directory | Out-Null
+    $savedTemp = $env:TEMP; $savedTmp = $env:TMP
+    try {
+        $env:TEMP = $directory; $env:TMP = $directory
+        & $Checks
+    } finally {
+        $env:TEMP = $savedTemp; $env:TMP = $savedTmp
+        Remove-Item -LiteralPath $directory -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function ConvertTo-SmokeSafeText {
+    param($Value)
+    if ($Value -isnot [string]) { return '' }
+    $text = [regex]::Replace($Value, 'https?://[^\s"''<>]+', {
+        param($match)
+        try { return ([Uri]$match.Value).GetLeftPart([UriPartial]::Path) }
+        catch { return '[URL omitted]' }
+    })
+    $text = $text -replace '[?#][^\s"''<>)]*', '[redacted]'
+    return $text.Substring(0, [Math]::Min(768, $text.Length))
+}
+
+function Assert-WindowsWorkbenchReport {
+    param([int]$ExitCode, [string]$Report)
+    if (-not (Test-Path -LiteralPath $Report -PathType Leaf)) { throw "Cage workbench acceptance failed ($ExitCode). No smoke report: $Report" }
+    if ((Get-Item -LiteralPath $Report).Length -gt 65536) { throw 'Cage smoke report exceeds the bounded diagnostic size.' }
+    $result = Get-Content -LiteralPath $Report -Raw | ConvertFrom-Json -AsHashtable
+    $safe = @{ phase = ConvertTo-SmokeSafeText $result['phase']; nativeStatus = ConvertTo-SmokeSafeText $result['nativeStatus']; jsErrors = @() }
+    if ($result['prepareExit'] -is [int] -or $result['prepareExit'] -is [long]) { $safe.prepareExit = $result['prepareExit'] }
+    if ($result['prepareStatus'] -in @('prepared', 'stop_required', 'error', 'unexpected')) { $safe.prepareStatus = $result['prepareStatus'] }
+    if ($result['page'] -is [System.Collections.IDictionary] -and $result['page']['errors']) {
+        $safe.jsErrors = @($result['page']['errors'] | Select-Object -First 8 | ForEach-Object {
+            if ($_ -isnot [System.Collections.IDictionary]) { return }
+            @{
+                type = ConvertTo-SmokeSafeText $_['type']
+                source = if ($_['source'] -is [string] -and $_['source'].StartsWith('/')) { ConvertTo-SmokeSafeText $_['source'] } else { '' }
+                message = ConvertTo-SmokeSafeText $_['message']
+                stack = @($_['stack'] | Select-Object -First 6 | ForEach-Object { ConvertTo-SmokeSafeText $_ })
+            }
+        })
+    }
+    # Log only these already-bounded fields, even when the process failed. Do
+    # not print launch entries, page URLs, account data or the raw report.
+    Write-Host ('Cage smoke diagnostic: ' + ($safe | ConvertTo-Json -Depth 6 -Compress))
+    if ($ExitCode -ne 0 -or $result['success'] -ne $true -or $result['nativeBridgeReady'] -ne $true) {
+        throw "Cage workbench/bridge acceptance failed ($ExitCode), phase $($safe.phase): $($safe.nativeStatus). Diagnostics: $Report"
+    }
+}
+
+function Assert-WindowsWorkbench {
+    param([Parameter(Mandatory)][string]$AppDirectory)
+    if (-not $IsWindows) { throw 'Workbench acceptance requires Windows.' }
+    $testRoot = Join-Path (Get-WindowsWorkbenchTestBase) ('cage-build-ui-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
+    $report = Join-Path $testRoot 'smoke.json'
+    $start = [Diagnostics.ProcessStartInfo]::new((Join-Path $AppDirectory 'Cage.exe'))
+    $start.UseShellExecute = $false
+    $start.WorkingDirectory = $AppDirectory
+    $start.Environment['CLAUDE_CAGE_CONFIG'] = Join-Path $testRoot 'profile/config.json'
+    $start.ArgumentList.Add('--smoke-test')
+    $start.ArgumentList.Add($report)
+    $window = [Diagnostics.Process]::Start($start)
+    $passed = $false
+    try {
+        if (-not $window.WaitForExit(180000)) { throw "Cage workbench acceptance timed out. Diagnostics retained at $testRoot" }
+        Assert-WindowsWorkbenchReport -ExitCode $window.ExitCode -Report $report
+        $passed = $true
+    } finally {
+        if (-not $window.HasExited) { $window.Kill($true); $window.WaitForExit() }
+        $window.Dispose()
+        if (-not $passed) {
+            # Close only this test's authenticated controller. Killing every
+            # cage.exe could terminate another installed application or VM.
+            try {
+                $cleanup = [Diagnostics.ProcessStartInfo]::new((Join-Path $AppDirectory 'resources/cage.exe'))
+                $cleanup.UseShellExecute = $false
+                $cleanup.CreateNoWindow = $true
+                $cleanup.RedirectStandardOutput = $true
+                $cleanup.RedirectStandardError = $true
+                $cleanup.Environment['CLAUDE_CAGE_CONFIG'] = Join-Path $testRoot 'profile/config.json'
+                $cleanup.ArgumentList.Add('prepare-update'); $cleanup.ArgumentList.Add('--json')
+                $controller = [Diagnostics.Process]::Start($cleanup)
+                try {
+                    $stdout = $controller.StandardOutput.ReadToEndAsync()
+                    $stderr = $controller.StandardError.ReadToEndAsync()
+                    if (-not $controller.WaitForExit(20000)) { $controller.Kill($true); $controller.WaitForExit() }
+                    if ($controller.ExitCode -ne 0) { Write-Warning 'The isolated smoke controller did not confirm shutdown; its profile is retained.' }
+                } finally { $controller.Dispose() }
+            } catch { Write-Warning "Isolated smoke cleanup failed: $($_.Exception.Message)" }
+        }
+        # A successful smoke report is written only after the isolated backend
+        # confirms shutdown. Failed profiles remain available for diagnosis.
+        if ($passed) { Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Get-CageVersion {
     param([string]$Repository)
     $value = (Get-Content -LiteralPath (Join-Path $Repository 'VERSION') -Raw).Trim()

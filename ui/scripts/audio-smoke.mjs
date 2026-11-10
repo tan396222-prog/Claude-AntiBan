@@ -3,11 +3,12 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.CAGE_PLAYWRIGHT_MODULE || "playwright");
+const browserName = process.env.CAGE_TEST_BROWSER || "chromium";
+const browserEngine = require(process.env.CAGE_PLAYWRIGHT_MODULE || "playwright")[browserName];
 const vite = await createServer({ root: fileURLToPath(new URL("..", import.meta.url)), configFile: fileURLToPath(new URL("../vite.config.js", import.meta.url)), server: { host: "127.0.0.1", port: 0 } });
 await vite.listen();
 const origin = `http://127.0.0.1:${vite.httpServer.address().port}`;
-const browser = await chromium.launch({ headless: true, args: ["--autoplay-policy=user-gesture-required"] });
+const browser = await browserEngine.launch({ headless: true, ...(browserName === "chromium" ? { args: ["--autoplay-policy=user-gesture-required"] } : {}) });
 const page = await browser.newPage();
 let connected = 0, open = 0;
 const timers = new Set(), errors = [];
@@ -21,10 +22,14 @@ await page.addInitScript(() => {
 });
 await page.route("**/audio-test", async route => route.fulfill({ contentType: "text/html", body: await vite.transformIndexHtml("/audio-test", '<div id="root"></div><script type="module" src="/scripts/audio-fixture.jsx"></script>') }));
 const format = { format: "s16le", sample_rate: 48000, channels: 2 };
-await page.route("**/api/audio", route => route.fulfill({ json: format }));
+let permissionMissing = false;
+const permissionMessage = "请在虚拟 Mac 的系统设置中允许 Cage Guest Window 录制屏幕和系统声音";
+await page.route("**/api/audio", route => route.fulfill(permissionMissing
+  ? { status: 409, contentType: "text/plain", body: permissionMessage }
+  : { json: format }));
 const packet = Buffer.alloc(3840);
 for (let i = 0; i < 960; i++) for (let channel = 0; channel < 2; channel++) packet.writeInt16LE(Math.round(Math.sin(i * 2 * Math.PI * 1000 / 48000) * 10000), i * 4 + channel * 2);
-await page.routeWebSocket("**/api/audio", socket => {
+await page.routeWebSocket("**/api/audio**", socket => {
   connected++; open++;
   socket.send(JSON.stringify(format));
   const timer = setInterval(() => socket.send(packet), 20);
@@ -44,7 +49,26 @@ const rms = () => page.evaluate(() => {
 try {
   await page.goto(origin + "/audio-test");
   await page.waitForFunction(() => !!window.testAudioContext);
-  await page.locator('input[aria-label="环境音量"]').click();
+  const slider = page.getByRole("slider", { name: "环境音量" });
+  const speaker = page.locator(".audio-controls button");
+  assert.equal(await slider.count(), 0);
+  await speaker.click();
+  assert.equal(await speaker.getAttribute("aria-expanded"), "true");
+  const buttonBox = await speaker.boundingBox();
+  const sliderBox = await slider.boundingBox();
+  assert.ok(sliderBox.height > sliderBox.width && sliderBox.y + sliderBox.height < buttonBox.y, "slider opens vertically above the speaker");
+  await page.mouse.move(sliderBox.x + sliderBox.width / 2, sliderBox.y + sliderBox.height / 2, { steps: 10 });
+  assert.equal(await slider.count(), 1, "moving from the speaker into the slider keeps it open");
+  await page.mouse.move(10, 10);
+  assert.equal(await slider.count(), 0, "moving away closes the slider");
+  await speaker.focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await slider.count(), 1, "keyboard opens the slider");
+  assert.equal(await slider.evaluate(element => element === document.activeElement), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await slider.count(), 0, "Escape closes the slider");
+  assert.equal(await speaker.evaluate(element => element === document.activeElement), true);
+  await speaker.click();
   await page.locator("output").filter({ hasText: "playing" }).waitFor();
   await page.evaluate(() => {
     window.testAudioAnalyser = window.testAudioContext.createAnalyser();
@@ -63,17 +87,25 @@ try {
   assert.ok(half > .09 && half < .13, `half-volume RMS ${half}`);
   await page.getByRole("button", { name: "静音", exact: true }).click();
   await waitFor(() => open === 0);
-  assert.equal(await page.evaluate(() => window.testAudioContext.state), "suspended");
+  await page.waitForFunction(() => window.testAudioContext.state === "suspended");
   await page.getByRole("button", { name: "取消静音", exact: true }).click();
   await waitFor(() => connected === 2 && open === 1);
+  await page.locator("output").filter({ hasText: "playing" }).waitFor();
+  permissionMissing = true;
+  await page.getByRole("button", { name: "静音", exact: true }).click();
+  await waitFor(() => open === 0);
+  await page.getByRole("button", { name: "取消静音", exact: true }).click();
+  await page.waitForFunction(message => document.querySelector(".audio-controls button")?.title.includes(message), permissionMessage);
+  assert.ok((await speaker.getAttribute("title")).includes(permissionMessage), "guest permission failure stays available on the audio control");
+  permissionMissing = false;
   await page.locator("output").filter({ hasText: "playing" }).waitFor();
   await page.getByRole("button", { name: "停止测试环境" }).click();
   await waitFor(() => open === 0);
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem("cage.audio")).volume), .5);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ result: "PASS", fullVolumeRMS: full, halfVolumeRMS: half, checks: ["real AudioWorklet PCM output", "volume", "mute closes stream", "unmute reconnects", "environment stop", "preference persistence"] }));
+  console.log(JSON.stringify({ result: "PASS", fullVolumeRMS: full, halfVolumeRMS: half, checks: ["real AudioWorklet PCM output", "volume", "mute closes stream", "unmute reconnects", "guest permission error", "recovery after permission restored", "environment stop", "preference persistence"] }));
 } catch (error) {
-  console.error({ pageErrors: errors, body: await page.locator("body").innerText() });
+  console.error({ pageErrors: errors, body: await page.locator("body").innerText(), connected, open, preference: await page.evaluate(() => localStorage.getItem("cage.audio")) });
   throw error;
 } finally {
   for (const timer of timers) clearInterval(timer);

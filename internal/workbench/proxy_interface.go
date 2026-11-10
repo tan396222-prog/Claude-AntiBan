@@ -22,7 +22,7 @@ func (s *Server) monitorProxyInterface() {
 	if err != nil {
 		_ = s.closeProxyGate(err.Error())
 		s.mu.Lock()
-		s.networkError = err.Error()
+		s.safety.monitorError = err.Error()
 		s.proxyNetworkLost = true
 		s.mu.Unlock()
 		return

@@ -12,6 +12,7 @@ import (
 
 	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/cli"
+	"github.com/sylvinus/agent-vm/internal/paths"
 	"github.com/sylvinus/agent-vm/internal/vmname"
 )
 
@@ -59,7 +60,15 @@ func TestControllerNamesMatchCLIForIndependentProfiles(t *testing.T) {
 		}
 	}
 	an, bn := cliName(a), cliName(b)
-	if an == bn || len(bn) >= len(an) || len(an) >= 76 {
+	wantA := vmname.HomeLimit(filepath.Join(a.profile, "state", "lima"), false).Name(workspace)
+	wantB := vmname.HomeLimit(filepath.Join(b.profile, "state", "lima"), false).Name(workspace)
+	if an != wantA || bn != wantB {
+		t.Fatalf("CLI names differ from their profile budgets: %q != %q, %q != %q", an, wantA, bn, wantB)
+	}
+	// /tmp keeps the POSIX fixture short enough to exercise different socket
+	// budgets. Deep Windows temp paths can legitimately reach the same minimum
+	// name; independent profile directories still isolate their state.
+	if filepath.Separator == '/' && (an == bn || len(bn) >= len(an) || len(an) >= 76) {
 		t.Fatalf("test requires different truncations: %q, %q", an, bn)
 	}
 	var wg sync.WaitGroup
@@ -72,8 +81,8 @@ func TestControllerNamesMatchCLIForIndependentProfiles(t *testing.T) {
 					t.Errorf("SSH target %s; CLI name %s", got, want)
 					return
 				}
-				if got := filepath.Base(s.instanceDir()); got != want {
-					t.Errorf("instance directory %s; CLI name %s", got, want)
+				if got, wantDir := s.instanceDir(), filepath.Join(s.profile, "state", "lima", want); !paths.Equal(paths.Host(filepath.Clean(got)), paths.Host(wantDir)) {
+					t.Errorf("instance directory %s; expected profile-owned directory %s", got, wantDir)
 					return
 				}
 			}

@@ -8,9 +8,10 @@ package vz
 import (
 	"context"
 
+	"github.com/lima-vm/lima/v2/pkg/driver"
 	"github.com/lima-vm/lima/v2/pkg/registry"
 )
 
 func init() {
-	registry.Register(context.Background(), New())
+	registry.Register(context.Background(), func() driver.Driver { return New() })
 }

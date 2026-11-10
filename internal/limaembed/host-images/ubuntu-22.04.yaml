@@ -1,0 +1,11 @@
+# Canonical Jammy release-20261106, verified against its published SHA256SUMS.
+# Keep this outside generated Lima assets so `make assets` preserves the pin.
+images:
+- location: "https://cloud-images.ubuntu.com/releases/jammy/release-20261106/ubuntu-22.04-server-cloudimg-amd64.img"
+  arch: "x86_64"
+  digest: "sha256:f77bc6d59cb8deaa9657095736b5f5003f7705b47055f01823459715c967de6a"
+  bytes: 730617344
+- location: "https://cloud-images.ubuntu.com/releases/jammy/release-20261106/ubuntu-22.04-server-cloudimg-arm64.img"
+  arch: "aarch64"
+  digest: "sha256:7fc0212296c65f8e20f8e9af89aaab9500ea4ec73cfb245afa0f2b509bb90785"
+  bytes: 701041664

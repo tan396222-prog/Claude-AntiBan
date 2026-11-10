@@ -1,0 +1,206 @@
+From: Cage contributors
+Subject: [PATCH] registry: give each internal driver lookup independent state
+
+Configure mutates the driver. Reusing the registered instance lets concurrent
+configuration overwrite another VM and race with Info or Validate. Keep a
+constructor for each internal driver, preserving Configure semantics for
+external driver servers. Carry the HCS SSH address through its instance.
+
+--- a/pkg/registry/registry.go
++++ b/pkg/registry/registry.go
+@@ -32,7 +32,7 @@
+ }
+ 
+ var (
+-	internalDrivers = make(map[string]driver.Driver)
++	internalDrivers = make(map[string]func() driver.Driver)
+ 	ExternalDrivers = make(map[string]*ExternalDriver)
+ )
+ 
+@@ -65,7 +65,7 @@
+ }
+ 
+ func Get(name string) (*ExternalDriver, driver.Driver, bool) {
+-	internalDriver, exists := internalDrivers[name]
++	factory, exists := internalDrivers[name]
+ 	if !exists {
+ 		if err := discoverDrivers(); err != nil {
+ 			logrus.Warnf("Error discovering drivers: %v", err)
+@@ -74,8 +74,9 @@
+ 		if exists {
+ 			return externalDriver, nil, exists
+ 		}
++		return nil, nil, false
+ 	}
+-	return nil, internalDriver, exists
++	return nil, factory(), true
+ }
+ 
+ func registerExternalDriver(name, path string) {
+@@ -188,10 +189,11 @@
+ 	return mode&0o111 != 0
+ }
+ 
+-func Register(ctx context.Context, driver driver.Driver) {
+-	name := driver.Info(ctx).Name
++// Register keeps a constructor so each lookup owns its driver state.
++func Register(ctx context.Context, factory func() driver.Driver) {
++	name := factory().Info(ctx).Name
+ 	if _, exists := internalDrivers[name]; exists {
+ 		return
+ 	}
+-	internalDrivers[name] = driver
++	internalDrivers[name] = factory
+ }
+--- a/pkg/driver/vz/register.go
++++ b/pkg/driver/vz/register.go
+@@ -8,9 +8,10 @@
+ import (
+ 	"context"
+ 
++	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/registry"
+ )
+ 
+ func init() {
+-	registry.Register(context.Background(), New())
++	registry.Register(context.Background(), func() driver.Driver { return New() })
+ }
+--- a/pkg/driver/qemu/register.go
++++ b/pkg/driver/qemu/register.go
+@@ -8,9 +8,10 @@
+ import (
+ 	"context"
+ 
++	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/registry"
+ )
+ 
+ func init() {
+-	registry.Register(context.Background(), New())
++	registry.Register(context.Background(), func() driver.Driver { return New() })
+ }
+--- a/pkg/driver/hcs/register.go
++++ b/pkg/driver/hcs/register.go
+@@ -8,9 +8,10 @@
+ import (
+ 	"context"
+ 
++	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/registry"
+ )
+ 
+ func init() {
+-	registry.Register(context.Background(), New())
++	registry.Register(context.Background(), func() driver.Driver { return New() })
+ }
+--- a/pkg/driver/wsl2/register.go
++++ b/pkg/driver/wsl2/register.go
+@@ -8,9 +8,10 @@
+ import (
+ 	"context"
+ 
++	"github.com/lima-vm/lima/v2/pkg/driver"
+ 	"github.com/lima-vm/lima/v2/pkg/registry"
+ )
+ 
+ func init() {
+-	registry.Register(context.Background(), New())
++	registry.Register(context.Background(), func() driver.Driver { return New() })
+ }
+--- a/pkg/driver/hcs/hcs_driver_windows.go
++++ b/pkg/driver/hcs/hcs_driver_windows.go
+@@ -100,6 +100,7 @@
+ 
+ 	l.Instance = inst
+ 	l.SSHLocalPort = inst.SSHLocalPort
++	l.sshAddress = inst.SSHAddress
+ 
+ 	return &driver.ConfiguredDriver{
+ 		Driver: l,
+--- a/pkg/driver/hcs/hcs_driver_windows_test.go
++++ b/pkg/driver/hcs/hcs_driver_windows_test.go
+@@ -127,6 +127,7 @@
+ 
+ 	t.Run("fills in the HCS defaults", func(t *testing.T) {
+ 		inst := newTestInstance(t, &limatype.LimaYAML{Arch: &arch})
++		inst.SSHAddress = "192.0.2.10"
+ 
+ 		l := New()
+ 		configured, err := l.Configure(t.Context(), inst)
+@@ -137,6 +138,7 @@
+ 		assert.Equal(t, *inst.Config.MountType, limatype.REVSSHFS)
+ 		assert.Equal(t, l.Instance, inst)
+ 		assert.Equal(t, l.SSHLocalPort, inst.SSHLocalPort)
++		assert.Equal(t, l.sshAddress, inst.SSHAddress)
+ 	})
+ 
+ 	t.Run("keeps the values that are already set", func(t *testing.T) {
+--- a/pkg/registry/registry_test.go
++++ b/pkg/registry/registry_test.go
+@@ -64,19 +64,19 @@
+ 	ctx := t.Context()
+ 	mockDrv := newMockDriver("test-driver")
+ 	mockDrv2 := newMockDriver("test-driver-2")
+-	Register(ctx, mockDrv)
+-	Register(ctx, mockDrv2)
++	Register(ctx, func() driver.Driver { return mockDrv })
++	Register(ctx, func() driver.Driver { return mockDrv2 })
+ 
+ 	assert.Equal(t, len(internalDrivers), 2)
+-	assert.Equal(t, internalDrivers["test-driver"], mockDrv)
+-	assert.Equal(t, internalDrivers["test-driver-2"], mockDrv2)
++	assert.Equal(t, internalDrivers["test-driver"](), mockDrv)
++	assert.Equal(t, internalDrivers["test-driver-2"](), mockDrv2)
+ 
+ 	// Test registering duplicate driver (should not overwrite)
+ 	mockDrv3 := newMockDriver("test-driver")
+-	Register(ctx, mockDrv3)
++	Register(ctx, func() driver.Driver { return mockDrv3 })
+ 
+ 	assert.Equal(t, len(internalDrivers), 2)
+-	assert.Equal(t, internalDrivers["test-driver"], mockDrv)
++	assert.Equal(t, internalDrivers["test-driver"](), mockDrv)
+ 
+ 	driverType := CheckInternalOrExternal("test-driver")
+ 	assert.Equal(t, driverType, Internal)
+@@ -188,13 +188,18 @@
+ func TestGet(t *testing.T) {
+ 	BackupRegistry(t)
+ 
+-	mockDrv := newMockDriver("internal-test")
+-	Register(t.Context(), mockDrv)
++	Register(t.Context(), func() driver.Driver { return newMockDriver("internal-test") })
+ 
+ 	extDriver, intDriver, exists := Get("internal-test")
+ 	assert.Equal(t, exists, true)
+ 	assert.Assert(t, extDriver == nil)
+-	assert.Equal(t, intDriver, mockDrv)
++	assert.Equal(t, intDriver.Info(t.Context()).Name, "internal-test")
++
++	_, secondDriver, exists := Get("internal-test")
++	assert.Equal(t, exists, true)
++	assert.Assert(t, secondDriver != intDriver)
++	intDriver.(*mockDriver).Name = "first-instance-only"
++	assert.Equal(t, secondDriver.Info(t.Context()).Name, "internal-test")
+ 
+ 	registerExternalDriver("external-test", "/path/to/external")
+ 
+@@ -216,8 +221,7 @@
+ 	vmTypes := List()
+ 	assert.Equal(t, len(vmTypes), 0)
+ 
+-	mockDrv := newMockDriver("internal-test")
+-	Register(t.Context(), mockDrv)
++	Register(t.Context(), func() driver.Driver { return newMockDriver("internal-test") })
+ 
+ 	vmTypes = List()
+ 	assert.Equal(t, len(vmTypes), 1)
+@@ -239,6 +243,6 @@
+ 		internalDrivers = originalInternalDrivers
+ 	})
+ 
+-	internalDrivers = make(map[string]driver.Driver)
++	internalDrivers = make(map[string]func() driver.Driver)
+ 	ExternalDrivers = make(map[string]*ExternalDriver)
+ }

@@ -44,6 +44,17 @@ func TestGuestConnectionRequiresSuccessfulMatchingManifest(t *testing.T) {
 func grantedToolUpdateServer(t *testing.T) (*Server, *cage.EgressGate) {
 	t.Helper()
 	s, gate := interfaceMonitorServer(t)
+	grantTestGate(t, gate)
+	s.ready = true
+	required := cage.RequiredGuestManifest()
+	s.guestManifest = &required
+	s.setJobForTest(Job{ID: "tools", Kind: "environment-tools", Running: true})
+	s.publishGate(gate.Status())
+	return s, gate
+}
+
+func grantTestGate(t *testing.T, gate *cage.EgressGate) {
+	t.Helper()
 	state := gate.Status()
 	report := cage.SafetyReport{Policy: cage.SafetyPolicyVersion, ID: "tool-update-test", RunID: state.RunID, CheckID: state.CheckID, Configuration: state.Configuration, CreatedAt: time.Now()}
 	for _, id := range []string{"egress_policy", "proxy_transport", "dns_transport", "guest_settings", "browser_settings", "filesystem_boundary", "management_boundary", "fail_closed", "udp_policy", "ipv6_policy", "exit_consistency"} {
@@ -52,12 +63,6 @@ func grantedToolUpdateServer(t *testing.T) (*Server, *cage.EgressGate) {
 	if err := gate.Grant(report); err != nil {
 		t.Fatal(err)
 	}
-	s.ready = true
-	required := cage.RequiredGuestManifest()
-	s.guestManifest = &required
-	s.setJobForTest(Job{ID: "tools", Kind: "environment-tools", Running: true})
-	s.publishGate(gate.Status())
-	return s, gate
 }
 
 func TestToolUpdateLeaseHonorsPauseStopAndConfigurationAtRenewal(t *testing.T) {

@@ -1,0 +1,31 @@
+#!/usr/bin/python3
+import os
+from pathlib import Path
+import sys
+from urllib.parse import urlsplit
+
+def launch():
+    if len(sys.argv) != 2 or os.environ.get('DISPLAY') != ':79' or os.environ.get('XDG_RUNTIME_DIR') != '/run/cage-phone-desktop':
+        return 1
+    value = sys.argv[1]
+    if not value or len(value) > 8192 or any(ord(c) < 32 for c in value):
+        return 1
+    parsed = urlsplit(value)
+    if parsed.scheme == 'claude':
+        os.execv('/usr/bin/claude-desktop', ['claude-desktop', '--user-data-dir=' + str(Path.home() / 'DesktopProfile'), value])
+    host = parsed.hostname or ''
+    if parsed.scheme != 'https' or parsed.username or parsed.password or parsed.port not in (443, None):
+        return 1
+    if not any(host == d or host.endswith('.' + d) for d in ('anthropic.com', 'claude.ai', 'claude.com')):
+        return 1
+    port = (Path(os.environ['XDG_RUNTIME_DIR']) / 'proxy').read_text()
+    os.execv('/usr/bin/chromium', ['chromium', '--user-data-dir=' + str(Path.home() / 'LoginProfile'),
+        '--class=CagePhoneLogin', '--no-first-run', '--no-default-browser-check', '--disable-extensions',
+        '--disable-quic', '--force-webrtc-ip-handling-policy=disable_non_proxied_udp',
+        '--proxy-server=socks5://127.0.0.1:' + str(int(port)), '--proxy-bypass-list=<-loopback>',
+        '--disable-dev-shm-usage', '--lang=' + os.environ.get('CAGE_LANGUAGE', 'en-US'), '--app=' + value])
+
+try:
+    sys.exit(launch())
+except Exception:
+    sys.exit(1)

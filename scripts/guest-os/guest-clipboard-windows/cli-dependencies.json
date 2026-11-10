@@ -1,0 +1,28 @@
+{
+  "uv": {
+    "version": "0.13.7",
+    "filename": "uv-x86_64-pc-windows-msvc.zip",
+    "url": "https://github.com/astral-sh/uv/releases/download/0.13.7/uv-x86_64-pc-windows-msvc.zip",
+    "sha256": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"
+  },
+  "python": {
+    "version": "3.13.18",
+    "key": "cpython-3.13.18-windows-x86_64-none",
+    "filename": "cpython-3.13.18+20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.13.18%2B20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "7369f7a35f261222a6ac8b3a87c1c88eeebee8af945d85346202591a64038dd3"
+  },
+  "claude": {
+    "version": "2.1.311",
+    "filename": "claude-2.1.311-win32-x64.exe",
+    "url": "https://downloads.claude.ai/claude-code-releases/2.1.311/win32-x64/claude.exe",
+    "manifest": "https://downloads.claude.ai/claude-code-releases/2.1.311/manifest.json",
+    "sha256": "966f4b2ce962298f5dee6a942e8c47c8f97392e69e728e622319a98b259c0680"
+  },
+  "git": {
+    "version": "2.56.0.4",
+    "filename": "PortableGit-2.56.0.4-64-bit.7z.exe",
+    "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/PortableGit-2.56.0.4-64-bit.7z.exe",
+    "sha256": "b1f3e52216e2ed6882d1bebfd4d3fdf319bec40d2edbbf9fd26ec4fd3fce7ed1"
+  }
+}

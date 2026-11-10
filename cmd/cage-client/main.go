@@ -14,13 +14,18 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/sylvinus/agent-vm/internal/agentcli"
 	"github.com/sylvinus/agent-vm/internal/cage"
 	"github.com/sylvinus/agent-vm/internal/diagnostics"
+	"github.com/sylvinus/agent-vm/internal/host"
 	"github.com/sylvinus/agent-vm/internal/version"
 	"github.com/sylvinus/agent-vm/internal/workbench"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "agent" {
+		os.Exit(agentcli.ClientMain(os.Args[2:], os.Stdin, os.Stdout))
+	}
 	if err := run(os.Args[1:]); err != nil {
 		diagnostics.Log("error", "client", err.Error())
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]string{"status": "error", "message": err.Error()})
@@ -32,6 +37,12 @@ func run(args []string) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" {
 		fmt.Println("Cage remote client " + version.Version + "\nCommands: desktop --json, serve, prepare-update. Workloads run on the selected remote host.")
 		return nil
+	}
+	if args[0] == "verify-web-assets" {
+		if len(args) != 1 {
+			return errors.New("verify-web-assets does not accept arguments")
+		}
+		return workbench.VerifyWebAssets()
 	}
 	config := os.Getenv(cage.ConfigEnv)
 	if config == "" {
@@ -108,7 +119,17 @@ func run(args []string) error {
 			return err
 		}
 		return printJSON(map[string]string{"status": "ok"}, nil)
-	case "upload-files", "browser-file":
+	case "share-project":
+		if len(args) != 6 || args[1] != "--json" || args[2] != "--connection" || args[3] == "" || (args[4] != "read" && args[4] != "write") {
+			return errors.New("share-project --json --connection ID read|write DIRECTORY")
+		}
+		return printJSON(workbench.ShareNativeCloudProject(config, args[3], args[5], args[4] == "read"))
+	case "desktop-file":
+		if len(args) != 5 || args[1] != "--json" || args[2] != "--connection" || args[3] == "" {
+			return errors.New("desktop-file --json --connection ID REQUEST")
+		}
+		return printJSON(workbench.DesktopFileForConnection(config, args[3], args[4]))
+	case "clipboard-files", "upload-files", "browser-file":
 		if len(args) < 4 || args[1] != "--json" {
 			return errors.New("invalid file command")
 		}
@@ -119,6 +140,12 @@ func run(args []string) error {
 			}
 			connection = args[3]
 			args = append(append([]string{}, args[:2]...), args[4:]...)
+		}
+		if args[0] == "clipboard-files" {
+			if len(args) < 4 {
+				return errors.New("clipboard-files --json --connection ID send|receive PATH...")
+			}
+			return printJSON(workbench.ClipboardFilesForConnection(config, connection, args[2], args[3:]))
 		}
 		if args[0] == "upload-files" {
 			if len(args) < 5 {
@@ -153,6 +180,7 @@ func relay(config string) error {
 	defer out.Close()
 	defer stderr.Close()
 	cmd.Stdout, cmd.Stderr = out, stderr
+	host.HideCommandWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		return err
 	}

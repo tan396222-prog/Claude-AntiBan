@@ -2,6 +2,7 @@
 [CmdletBinding()]
 param(
     [switch]$Release,
+    [switch]$Sign,
     [switch]$SkipUI,
     [string]$OutputDirectory,
     [string]$DependencyCache
@@ -13,7 +14,8 @@ if (-not $DependencyCache) { $DependencyCache = Join-Path $repository '_output/w
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath (Join-Path $OutputDirectory 'Uninstall.exe')) { throw 'Do not build over an installed application. Choose a separate output directory and use the installer to upgrade.' }
 $version = Get-CageVersion $repository
-if ($Release) { Assert-WindowsSigningConfiguration }
+$signed = $Release -or $Sign
+if ($signed) { Assert-WindowsSigningConfiguration }
 $go = Get-BuildCommand @('go')
 $dotnet = Get-BuildCommand @('dotnet')
 $node = Get-BuildCommand @('node')
@@ -28,8 +30,10 @@ try {
     if (-not $SkipUI) {
         Invoke-BuildTool $npm @('--prefix', 'ui', 'ci', '--no-audit', '--no-fund')
         Invoke-BuildTool $npm @('run', '--prefix', 'ui', 'build')
+    } else {
+        Invoke-BuildTool $node @('ui/scripts/verify-build.mjs')
     }
-    $limaVersion = ((Get-Content 'third_party/SOURCES' | Where-Object { $_ -match '^lima\s' }) -split '\s+')[3]
+    $limaVersion = (Get-Content 'internal/limaembed/lima-version' -Raw).Trim()
     $assets = Join-Path $repository 'internal/limaembed/assets'
     $guest = Join-Path $assets 'lima-guestagent.Linux-x86_64'
     $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
@@ -47,10 +51,35 @@ try {
     $resources = Join-Path $app 'resources'
     New-Item -ItemType Directory -Path $resources -Force | Out-Null
     New-Item -ItemType Directory -Path (Join-Path $resources 'runtime') -Force | Out-Null
+    $guestSetup = New-Item -ItemType Directory -Path (Join-Path $resources 'guest-os')
+    Copy-Item -LiteralPath 'scripts/guest-os/new-windows-test-vm.ps1' -Destination (Join-Path $guestSetup.FullName 'new-windows-guest.ps1')
+    Copy-Item -LiteralPath 'scripts/guest-os/windows-host-image.ps1' -Destination $guestSetup.FullName
+    foreach ($file in @('windows-guest-media.ps1', 'install-guest-powershell.cmd', 'setup-windows-guest.ps1', 'complete-windows-guest.ps1', 'install-windows-host-manager.ps1', 'install-windows-workbench-components.ps1', 'initialize-windows-workbench-user.ps1', 'windows-host-enrollment.ps1', 'maintain-windows-workbench.ps1', 'update-windows-workbench-components.ps1', 'publish-windows-component-manifest.ps1', 'windows-workbench-packages.ps1')) {
+        Copy-Item -LiteralPath (Join-Path 'scripts/guest-os' $file) -Destination $guestSetup.FullName
+    }
+    $bridgeSetup = New-Item -ItemType Directory -Path (Join-Path $guestSetup.FullName 'guest-clipboard-windows')
+    foreach ($file in @('install.ps1', 'install-network.ps1')) {
+        Copy-Item -LiteralPath (Join-Path 'scripts/guest-os/guest-clipboard-windows' $file) -Destination $bridgeSetup.FullName
+    }
+    & (Join-Path $PSScriptRoot 'guest-os/build-windows-workbench-payload.ps1') -Destination (Join-Path $guestSetup.FullName 'payload')
+    $tailnetAssets = Join-Path $repository 'internal/tailnetassets/assets'
+    New-Item -ItemType Directory -Path $tailnetAssets -Force | Out-Null
+    foreach ($tailnetArch in @('amd64','arm64')) {
+        $env:GOOS = 'linux'; $env:GOARCH = $tailnetArch; $env:CGO_ENABLED = '0'
+        $tailnetOutput = Join-Path $stage ('cage-tailnet-linux-'+$tailnetArch)
+        Push-Location (Join-Path $repository 'tools/tailnet')
+        try { Invoke-BuildTool $go @('build','-trimpath','-ldflags','-s -w','-o',$tailnetOutput,'.') } finally { Pop-Location }
+        $source = [IO.File]::OpenRead($tailnetOutput)
+        $target = [IO.File]::Create((Join-Path $tailnetAssets ('cage-tailnet-linux-'+$tailnetArch+'.gz')))
+        try { $compressed = [IO.Compression.GZipStream]::new($target,[IO.Compression.CompressionMode]::Compress); try { $source.CopyTo($compressed) } finally { $compressed.Dispose() } } finally { $source.Dispose(); $target.Dispose() }
+    }
+    $env:GOARCH = 'amd64'
     $env:GOOS = 'windows'
     $tags = 'external_hcs,external_wsl2,yq_noxml,yq_nolua,yq_noini,yq_nohcl,yq_notoml,yq_noprops,yq_nocsv,yq_nouri,yq_nobase64,yq_nosh,yq_noshell'
     $ldflags = "-s -w -X github.com/sylvinus/agent-vm/internal/version.Version=$version -X github.com/lima-vm/lima/v2/pkg/version.Version=$limaVersion"
     Invoke-BuildTool $go @('build', '-trimpath', '-tags', $tags, '-ldflags', $ldflags, '-o', (Join-Path $resources 'cage.exe'), './cmd/cage')
+    Invoke-BuildTool (Join-Path $resources 'cage.exe') @('verify-vm-assets')
+    Invoke-BuildTool (Join-Path $resources 'cage.exe') @('verify-web-assets')
     Invoke-BuildTool $dotnet @('publish', 'desktop/windows/Cage.Windows.csproj', '-c', 'Release', '-r', 'win-x64', '--self-contained', 'true',
         '-p:EnableWindowsTargeting=true', '-p:PublishSingleFile=true', '-p:RestoreLockedMode=true', "-p:Version=$version", "-p:InformationalVersion=$version", '-o', $app)
     Get-ChildItem -LiteralPath $app -File | Where-Object { $_.Extension -in @('.pdb', '.xml') } | Remove-Item -Force
@@ -74,12 +103,31 @@ try {
     $qemuArchive = Get-VerifiedDependency $dependencies.qemu $DependencyCache
     $qemuTarget = Join-Path $resources 'runtime/qemu'
     Expand-BuildArchive $qemuArchive $qemuTarget $sevenZip
+    $qemuBuilt = Join-Path $DependencyCache 'qemu-cage'
+    & (Join-Path $PSScriptRoot 'build-qemu-windows.ps1') -DependencyCache $DependencyCache -OutputDirectory $qemuBuilt
+    $runtimeManifest = Get-Content (Join-Path $qemuBuilt 'cage-build.json') -Raw | ConvertFrom-Json
+    $ownedRuntime = @($runtimeManifest.files | ForEach-Object { $_.name }) + @('cage-build.json')
+    foreach ($name in $ownedRuntime) {
+        if ([IO.Path]::GetFileName($name) -ne $name) { throw 'Invalid QEMU runtime manifest path.' }
+        Copy-Item -LiteralPath (Join-Path $qemuBuilt $name) -Destination $qemuTarget -Force
+    }
+    # The two executables above are linked against the built dependency closure.
+    # Vendor DLLs/executables outside that closure have no runtime consumer.
+    Get-ChildItem -LiteralPath $qemuTarget -File | Where-Object {
+        $_.Extension -in @('.exe', '.dll') -and $_.Name -notin $ownedRuntime
+    } | Remove-Item -Force
     # Ship the x64 VM only, with its original firmware, DLLs and notices.
     Get-ChildItem -LiteralPath $qemuTarget -Filter 'qemu-system-*.exe' | Where-Object { $_.Name -ne 'qemu-system-x86_64.exe' } | Remove-Item -Force
     Get-ChildItem -LiteralPath (Join-Path $qemuTarget 'share') -File |
         Where-Object { $_.Name -match '^edk2-(?:aarch64|arm|loongarch64|riscv)-.*\.fd$' } | Remove-Item -Force
-    foreach ($file in @('qemu-system-x86_64.exe', 'qemu-img.exe')) {
+    foreach ($file in @('qemu-system-x86_64.exe', 'qemu-img.exe', 'share/efi-virtio.rom', 'share/kvmvapic.bin')) {
         if (-not (Test-Path -LiteralPath (Join-Path $qemuTarget $file))) { throw "QEMU archive lacks $file" }
+    }
+    $firmwareDirectories = & (Join-Path $qemuTarget 'qemu-system-x86_64.exe') '-L' 'help'
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect QEMU firmware directories.' }
+    $bundledFirmware = [IO.Path]::GetFullPath((Join-Path $qemuTarget 'share')).TrimEnd('\', '/')
+    if (-not @($firmwareDirectories | Where-Object { [IO.Path]::GetFullPath($_).TrimEnd('\', '/') -eq $bundledFirmware }).Count) {
+        throw 'QEMU cannot locate its bundled firmware after relocation.'
     }
     Remove-Item -LiteralPath (Join-Path $qemuTarget '$PLUGINSDIR') -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath (Join-Path $qemuTarget 'qemu-uninstall.exe') -Force -ErrorAction SilentlyContinue
@@ -122,12 +170,13 @@ try {
     Copy-Item -LiteralPath 'LICENSE' -Destination (Join-Path $app 'LICENSE.txt')
     [IO.File]::WriteAllText((Join-Path $app 'Cage.install-id'), 'io.github.lee-xeo.claude-cage')
     [IO.File]::WriteAllText((Join-Path $app 'version.txt'), $version)
-    if ($Release) {
+    if ($signed) {
         $signTool = Get-SigningTool
         foreach ($file in @('Cage.exe', 'resources/cage.exe', 'resources/mihomo.exe')) { Sign-CageFile (Join-Path $app $file) $signTool }
     } else {
         [IO.File]::WriteAllText((Join-Path $app 'DEVELOPMENT-BUILD.txt'), "Unsigned development build. Automatic update installation is disabled. Windows 10/11 runtime acceptance is still required.`n")
     }
+    Assert-WindowsWorkbench $app
     $previousOutput = $null
     if (Test-Path -LiteralPath $OutputDirectory) {
         $marker = Join-Path $OutputDirectory 'Cage.install-id'
@@ -148,5 +197,8 @@ try {
 } finally {
     Pop-Location
     $env:GOOS = $savedGoOS; $env:GOARCH = $savedGoArch; $env:CGO_ENABLED = $savedCGO
-    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
+    if (Test-Path -LiteralPath $stage) {
+        try { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop }
+        catch { Write-Warning "Temporary build files remain at $stage. Cleanup did not complete: $($_.Exception.Message)" }
+    }
 }

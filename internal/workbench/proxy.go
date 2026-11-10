@@ -51,7 +51,7 @@ func (s *Server) proxyStatus(w http.ResponseWriter, r *http.Request) {
 		if u, e := url.Parse(src.URL); e == nil {
 			host = u.Hostname()
 		}
-		sources = append(sources, map[string]any{"id": src.ID, "name": src.Name, "remote": src.URL != "", "host": host, "interval_hours": src.Interval, "updated_at": src.Updated, "error": src.Error, "usage": src.Usage, "nodes": nodes})
+		sources = append(sources, map[string]any{"id": src.ID, "name": src.Name, "remote": src.URL != "", "host": host, "interval_hours": src.Interval, "updated_at": src.Updated, "error": src.Error, "usage": src.Usage, "nodes": nodes, "skipped": src.Skipped})
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
@@ -372,7 +372,8 @@ func (s *Server) applyProxy(p managedproxy.Store, old cage.Config, resumeVersion
 	// Only a user request may resume networking, and a later pause wins even
 	// when it arrived while subscription download or core startup was pending.
 	paused := s.networkPaused
-	s.networkError = ""
+	s.exitProbeError = ""
+	s.locationError = ""
 	s.location = nil
 	s.safety.Report = nil
 	s.mu.Unlock()
@@ -517,6 +518,6 @@ func (s *Server) checkProxyHealth() {
 	}
 	_ = s.closeProxyGate("内置代理已中断或节点状态变化，请重试应用节点")
 	s.mu.Lock()
-	s.networkError = "内置代理未就绪；外网保持关闭"
+	s.safety.monitorError = "内置代理未就绪；外网保持关闭"
 	s.mu.Unlock()
 }

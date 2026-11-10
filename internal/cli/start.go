@@ -550,7 +550,11 @@ func (s *start) ensureRunningLocked() error {
 		case gitStale && s.protect:
 			fmt.Fprintf(s.io.Stdout, "Making every .git read-only for VM '%s'...\n", s.name)
 		case gitStale:
-			s.warnf("Making .git writable for VM '%s' (%s)...", s.name, map[bool]string{true: "--unsafe-writable-git", false: "AGENT_VM_UNSAFE_WRITABLE_GIT=1"}[o.UnsafeWritableGit])
+			if cageWritableGit() {
+				fmt.Fprintf(s.io.Stdout, "Enabling Git writes in Cage projects for VM '%s'...\n", s.name)
+			} else {
+				s.warnf("Making .git writable for VM '%s' (%s)...", s.name, map[bool]string{true: "--unsafe-writable-git", false: "AGENT_VM_UNSAFE_WRITABLE_GIT=1"}[o.UnsafeWritableGit])
+			}
 		case namesStale:
 			fmt.Fprintf(s.io.Stdout, "Making %s read-only for VM '%s'...\n", strings.Join(s.names, ", "), s.name)
 		}

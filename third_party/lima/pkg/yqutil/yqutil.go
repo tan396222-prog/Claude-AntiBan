@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 
 	"github.com/google/yamlfmt"
 	"github.com/google/yamlfmt/formatters/basic"
@@ -18,8 +19,16 @@ import (
 	logging "gopkg.in/op/go-logging.v1"
 )
 
+// yqlib shares its parser, security preferences and logging backend.
+// Keep validation and evaluation in the same critical section so each call
+// owns both its parser state and the diagnostics captured for that call.
+var operationMu sync.Mutex
+
 // ValidateContent decodes the content yaml, to check it for syntax errors.
 func ValidateContent(content []byte) error {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+
 	memory := logging.NewMemoryBackend(0)
 	backend := logging.AddModuleLevel(memory)
 	logging.SetBackend(backend)
@@ -44,6 +53,9 @@ func EvaluateExpressionWithEncoder(expression, content string, encoder yqlib.Enc
 	if expression == "" {
 		return content, nil
 	}
+	operationMu.Lock()
+	defer operationMu.Unlock()
+
 	logrus.Debugf("Evaluating yq expression: %#q", expression)
 	memory := logging.NewMemoryBackend(0)
 	backend := logging.AddModuleLevel(memory)

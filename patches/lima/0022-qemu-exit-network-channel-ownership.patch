@@ -1,0 +1,165 @@
+Subject: [PATCH] qemu: close the wait channel only after both producers finish
+
+---
+diff --git a/pkg/driver/qemu/qemu_driver.go b/pkg/driver/qemu/qemu_driver.go
+--- a/pkg/driver/qemu/qemu_driver.go
++++ b/pkg/driver/qemu/qemu_driver.go
+@@ -553,29 +553,22 @@
+ 		return nil, err
+ 	}
+ 	l.qCmd = qCmd
+-	l.qWaitCh = make(chan error, 1)
+-	go func() {
+-		defer close(l.qWaitCh)
+-		defer cancel()
+-		err := qCmd.Wait()
+-		if l.usernetStop != nil {
+-			l.usernetStop()
+-		}
+-		l.qWaitCh <- err
+-	}()
+ 	l.vhostCmds = vhostCmds
+-	go func() {
++	l.qWaitCh = watchQEMU(qCmd.Wait, func() error {
+ 		client := l.usernetClient
+ 		if usernetIndex := limayaml.FirstUsernetIndex(l.Instance.Config); usernetIndex != -1 {
+ 			client = usernet.NewClientByName(l.Instance.Config.Networks[usernetIndex].Lima)
+ 		}
+ 		if client != nil {
+-			err := client.ConfigureDriver(ctx, l.Instance, l.SSHLocalPort)
+-			if err != nil {
+-				l.qWaitCh <- err
+-			}
+-		}
+-	}()
++			return client.ConfigureDriver(ctx, l.Instance, l.SSHLocalPort)
++		}
++		return nil
++	}, func() {
++		cancel()
++		if l.usernetStop != nil {
++			l.usernetStop()
++		}
++	})
+ 
+ 	// QEMU's UEFI boot order doesn't work well for Windows guest OS.
+ 	// We send a key periodically to proceed from "Press any key to boot from CD or DVD...".
+@@ -834,7 +827,7 @@
+ 	return nil
+ }
+ 
+-func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration, qCmd *exec.Cmd, qWaitCh <-chan error) error {
++func (l *LimaQemuDriver) shutdownQEMU(ctx context.Context, timeout time.Duration, qCmd *exec.Cmd, qWaitCh chan error) error {
+ 	// "power button" refers to ACPI on the most archs, except RISC-V
+ 	logrus.Info("Shutting down QEMU with the power button")
+ 	client := l.usernetClient
+@@ -892,7 +885,7 @@
+ 	}
+ }
+ 
+-func (l *LimaQemuDriver) killQEMU(_ context.Context, _ time.Duration, qCmd *exec.Cmd, qWaitCh <-chan error) error {
++func (l *LimaQemuDriver) killQEMU(_ context.Context, _ time.Duration, qCmd *exec.Cmd, qWaitCh chan error) error {
+ 	var qWaitErr error
+ 	if qCmd.ProcessState == nil {
+ 		if killErr := qCmd.Process.Kill(); killErr != nil {
+diff --git a/pkg/driver/qemu/process_wait.go b/pkg/driver/qemu/process_wait.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/driver/qemu/process_wait.go
+@@ -0,0 +1,30 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import "sync"
++
++// watchQEMU reports process exit and network setup failures on the driver's
++// existing wait channel. afterExit cancels setup and releases the netstack.
++func watchQEMU(wait, configure func() error, afterExit func()) chan error {
++	// Each producer can publish once even when Start's caller has stopped
++	// receiving. Only the coordinator closes the channel, after both finish.
++	errors := make(chan error, 2)
++	var producers sync.WaitGroup
++	producers.Add(2)
++	go func() {
++		defer producers.Done()
++		err := wait()
++		afterExit()
++		errors <- err
++	}()
++	go func() {
++		defer producers.Done()
++		if err := configure(); err != nil {
++			errors <- err
++		}
++	}()
++	go func() { producers.Wait(); close(errors) }()
++	return errors
++}
+diff --git a/pkg/driver/qemu/process_wait_test.go b/pkg/driver/qemu/process_wait_test.go
+new file mode 100644
+--- /dev/null
++++ b/pkg/driver/qemu/process_wait_test.go
+@@ -0,0 +1,61 @@
++// SPDX-FileCopyrightText: Copyright The Lima Authors
++// SPDX-License-Identifier: Apache-2.0
++
++package qemu
++
++import (
++	"errors"
++	"testing"
++	"time"
++)
++
++func TestQEMUProcessExitDuringNetworkConfiguration(t *testing.T) {
++	processError := errors.New("WHPX: Failed to enable nested virtualization, hr=80370302")
++	networkError := errors.New("network setup ended after QEMU exit")
++	release := make(chan struct{})
++	cleaned := make(chan struct{})
++	results := watchQEMU(func() error { return processError }, func() error { <-release; return networkError }, func() { close(cleaned) })
++	select {
++	case err := <-results:
++		if !errors.Is(err, processError) {
++			t.Fatalf("lost original process error: %v", err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("process exit was not reported")
++	}
++	<-cleaned
++	close(release)
++	select {
++	case err, ok := <-results:
++		if !ok || !errors.Is(err, networkError) {
++			t.Fatalf("closed before the network producer completed: %v %v", ok, err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("late network setup failure blocked")
++	}
++	select {
++	case _, ok := <-results:
++		if ok {
++			t.Fatal("unexpected extra event")
++		}
++	case <-time.After(time.Second):
++		t.Fatal("finished producers did not close the wait channel")
++	}
++}
++
++func TestQEMUNetworkFailureDoesNotBlockProcessReaping(t *testing.T) {
++	processDone := make(chan struct{})
++	reaped := make(chan struct{})
++	results := watchQEMU(func() error { <-processDone; return errors.New("killed") }, func() error { return errors.New("network failed") }, func() { close(reaped) })
++	// Stop consuming after the first startup error, just as a failed Start
++	// caller can do. Both producers must still finish and reap the process.
++	<-results
++	close(processDone)
++	select {
++	case <-reaped:
++	case <-time.After(time.Second):
++		t.Fatal("process cleanup blocked behind an abandoned consumer")
++	}
++	for range results {
++	}
++}

@@ -11,11 +11,14 @@ import (
 var errClaudeAccessLost = errors.New("Cage 已锁定，请先解锁")
 
 type claudeAccountInput struct {
-	Action   string `json:"action"`
-	Identity string `json:"identity"`
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Enabled  *bool  `json:"enabled"`
+	Action       string            `json:"action"`
+	Identity     string            `json:"identity"`
+	ID           string            `json:"id"`
+	Label        string            `json:"label"`
+	Enabled      *bool             `json:"enabled"`
+	HandoffGroup *string           `json:"handoff_group"`
+	Scheduling   *claudeScheduling `json:"scheduling"`
+	Order        []string          `json:"order"`
 }
 
 func (s *Server) listClaudeAccounts(w http.ResponseWriter, r *http.Request) {
@@ -62,12 +65,40 @@ func (s *Server) mutateClaudeAccounts(w http.ResponseWriter, r *http.Request) {
 		return
 	case "refresh", "refresh_default":
 		err = s.refreshClaudeUsage(r.Context(), input)
-	case "update":
+	case "update", "scheduling":
+		s.op.Lock()
+		defer s.op.Unlock()
 		m := &s.claudeAccounts
 		m.mu.Lock()
 		list, loadErr := s.loadClaudeAccounts()
 		err = loadErr
-		if err == nil {
+		if err == nil && input.Action == "scheduling" {
+			if input.Scheduling == nil || !input.Scheduling.valid() {
+				err = errors.New("请选择有效的调度模式和切换授权")
+			} else {
+				list.Scheduling = *input.Scheduling
+			}
+			if err == nil && input.Order != nil {
+				if len(input.Order) != len(list.Accounts) {
+					err = errors.New("账号列表已变化，请刷新后排序")
+				} else {
+					ordered := make([]claudeAccount, 0, len(input.Order))
+					seen := map[string]bool{}
+					for _, id := range input.Order {
+						a := list.find(id)
+						if a == nil || seen[id] {
+							err = errors.New("账号顺序无效")
+							break
+						}
+						seen[id] = true
+						ordered = append(ordered, *a)
+					}
+					if err == nil {
+						list.Accounts = ordered
+					}
+				}
+			}
+		} else if err == nil {
 			err = list.change(input)
 		}
 		if err == nil {

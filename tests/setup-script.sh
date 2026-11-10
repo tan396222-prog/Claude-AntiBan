@@ -61,6 +61,21 @@ else
   pass "no remote script runs as root"
 fi
 
+# Exercise the real package transaction without installing on the host.
+chromium_block="$(awk '/^if \[\[ "\$INSTALL_CHROMIUM" == "1" \]\]; then/,/^fi$/' "$SETUP_SH")"
+chromium_install="$(
+  INSTALL_CHROMIUM=1 CLAUDE_CAGE=1
+  sudo() { :; }
+  apt_get() { printf 'install: %s\n' "$*"; }
+  cage_is_ubuntu() { return 1; }
+  cage_cache_chromium() { printf 'cache: %s\n' "$*"; }
+  eval "$chromium_block"
+)"
+case "$chromium_install" in
+  *'install: install -y --no-install-recommends chromium chromium-l10n '*) pass "Chromium explicitly installs its language packs";;
+  *) fail "Chromium install omits language packs: $chromium_install";;
+esac
+
 # Behind a proxy, sudo must keep the proxy settings Lima puts in the guest's
 # environment (#25): installed before the first apt call, and checked by
 # visudo first, since a broken sudoers file breaks sudo.

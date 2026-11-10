@@ -16,7 +16,7 @@ test("address input retains loopback inside guest and rejects active schemes", (
   assert.throws(() => normalizeURL("file:///etc/passwd"));
 });
 
-import { api } from "./api.js";
+import { api, native, nativeAvailable } from "./api.js";
 function nativeRuntime(t, fetcher, bridge) {
   const saved = {
     fetch: globalThis.fetch,
@@ -37,6 +37,34 @@ function nativeRuntime(t, fetcher, bridge) {
 }
 const json = (data, status = 200) =>
   new Response(JSON.stringify(data), { status });
+test("aborted session opens preserve their cancellation reason and do not replay", async t => {
+  const controller = new AbortController();
+  const reason = new Error("打开会话超时");
+  let calls = 0;
+  nativeRuntime(t, async (_path, options) => {
+    calls++;
+    assert.equal(options.signal, controller.signal);
+    return new Promise((_, reject) => options.signal.addEventListener("abort", () => reject(options.signal.reason), {once:true}));
+  }, () => { throw new Error("unexpected renewal"); });
+  const pending = api("/cli/sessions/test/open", {}, undefined, {}, {signal:controller.signal});
+  controller.abort(reason);
+  await assert.rejects(pending, error => error === reason);
+  assert.equal(calls,1);
+});
+test("Linux native calls survive WebKit's transient messageHandlers objects", async (t) => {
+  const calls = [];
+  nativeRuntime(t, () => { throw Error("unexpected request"); }, () => {});
+  Object.defineProperty(window, "webkit", {
+    get: () => ({ messageHandlers: {} }),
+  });
+  window.cageNativeBridge = {
+    postMessage: async (request) => { calls.push(request); return "clipboard text"; },
+  };
+  assert.equal(nativeAvailable(), true);
+  assert.equal(await native("clipboardRead"), "clipboard text");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].action, "clipboardRead");
+});
 test("expired concurrent requests renew once and accept the rejected stop exactly once", async (t) => {
   let authorized = false,
     renewals = 0,

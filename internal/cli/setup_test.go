@@ -298,6 +298,29 @@ func TestSetupBase(t *testing.T) {
 	}
 }
 
+func TestCageCustomSetupUsesBashRegardlessOfGuestLoginShell(t *testing.T) {
+	te, code, _ := setupRun(t, "--preinstall=none")
+	if code != 0 {
+		t.Fatal(te.out())
+	}
+	t.Setenv("CLAUDE_CAGE_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+	if err := os.WriteFile(te.state.Path("setup.sh"), []byte("set -euo pipefail\nlocal_marker=ready\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var commands []string
+	te.fake.ShellFunc = func(_ string, options vm.ShellOpts) int {
+		_, _ = io.Copy(io.Discard, options.Stdin)
+		commands = append(commands, strings.Join(options.Args, " "))
+		return 0
+	}
+	if result := te.setupBase([]string{"setup", "--preinstall=none"}); result != 0 {
+		t.Fatalf("%d: %s", result, te.out())
+	}
+	if len(commands) != 2 || commands[1] != "bash -l" {
+		t.Fatalf("Cage script ran in the guest login shell: %v", commands)
+	}
+}
+
 func TestCageSetupResumesExistingBuild(t *testing.T) {
 	t.Setenv("CLAUDE_CAGE_CONFIG", filepath.Join(t.TempDir(), "config.json"))
 	te := newTestEnv(t, vmtest.New())

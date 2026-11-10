@@ -1,0 +1,248 @@
+.message-body.markdown {
+  white-space: normal;
+  min-width: 0;
+  line-height: 1.68;
+}
+.markdown > * {
+  margin-block: 0 0.7em;
+}
+.markdown > :last-child,
+.markdown li > :last-child {
+  margin-bottom: 0;
+}
+.markdown :is(h2, h3, h4, h5, h6) {
+  margin: 1.1em 0 0.35em;
+  line-height: 1.35;
+  font-weight: 670;
+  letter-spacing: -0.015em;
+}
+.markdown > :first-child {
+  margin-top: 0;
+}
+.markdown h2 {
+  font-size: 1.24em;
+}
+.markdown h3 {
+  font-size: 1.1em;
+}
+.markdown :is(h4, h5, h6) {
+  font-size: 1em;
+}
+.markdown :is(ul, ol) {
+  padding-inline-start: 1.48em;
+}
+.markdown li + li {
+  margin-top: 0.25em;
+}
+.markdown li > :is(ul, ol) {
+  margin-block: 0.2em;
+}
+.markdown .check-item {
+  list-style: none;
+}
+.markdown .check-item > input {
+  margin: 0 0.4em 0 -1.35em;
+  accent-color: var(--green);
+}
+.markdown blockquote {
+  border-inline-start: 3px solid var(--line);
+  padding-inline-start: 0.85em;
+  color: var(--muted);
+}
+.markdown a {
+  color: var(--focus);
+  text-decoration: underline;
+  text-underline-offset: 0.17em;
+}
+.markdown hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.markdown :not(pre) > code {
+  border: 1px solid var(--line);
+  background: var(--soft);
+  border-radius: 4px;
+  padding: 0.05em 0.28em;
+  font:
+    0.86em/1.45 ui-monospace,
+    monospace;
+}
+.markdown .code-block,
+.markdown .md-table {
+  max-width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.markdown .code-block {
+  background: var(--soft);
+}
+.code-block > small {
+  display: block;
+  padding: 4px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+}
+.code-block pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font:
+    13px/1.55 ui-monospace,
+    monospace;
+}
+.markdown .md-table {
+  overflow: auto;
+}
+.md-table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88em;
+}
+.md-table th,
+.md-table td {
+  min-width: 5em;
+  border: 1px solid var(--line);
+  padding: 0.35em 0.6em;
+  text-align: start;
+}
+.md-table th {
+  background: var(--soft);
+}
+.literal-markup {
+  white-space: pre-wrap;
+}
+.claude-record {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--paper);
+}
+.claude-record summary {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  padding: 8px 12px;
+  cursor: pointer;
+  line-height: 1.45;
+  list-style: none;
+}
+.claude-record summary::-webkit-details-marker {
+  display: none;
+}
+.claude-record summary > svg {
+  flex: none;
+  color: var(--muted);
+}
+.claude-record summary > svg:last-child {
+  margin-inline-start: auto;
+}
+.claude-record[open] summary > svg:last-child {
+  transform: rotate(90deg);
+}
+.claude-record summary small,
+.claude-record dt,
+.tool-history li small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-record summary small,
+.task-record strong {
+  display: block;
+}
+.task-record summary .task-icon {
+  color: var(--green);
+}
+.claude-record .bad {
+  color: var(--error);
+}
+.claude-record dl,
+.claude-record pre,
+.tool-history ul {
+  margin: 0;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+}
+.claude-record dd {
+  margin: 2px 0 8px;
+  font:
+    13px/1.5 ui-monospace,
+    monospace;
+  white-space: pre-wrap;
+}
+.claude-record pre {
+  white-space: pre-wrap;
+  max-height: 40vh;
+  overflow: auto;
+}
+.tool-history {
+  margin-bottom: 10px;
+}
+.tool-history ul {
+  list-style: none;
+}
+.tool-history li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+.tool-history li + li {
+  margin-top: 7px;
+}
+.tool-history li p {
+  grid-column: 1/-1;
+  font-size: 13px;
+  color: var(--muted);
+}
+.project-media {
+  display: block;
+  margin-block: 6px;
+  max-width: 100%;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.media-trigger {
+  width: 100%;
+  min-height: 44px;
+  padding: 7px 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: var(--soft);
+  text-align: start;
+}
+.media-trigger svg,
+.media-trigger small {
+  flex: none;
+  color: var(--muted);
+}
+.media-trigger span {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.project-media img,
+.project-media video {
+  display: block;
+  max-width: 100%;
+  max-height: 55vh;
+  margin: auto;
+}
+.media-error {
+  display: block;
+  padding: 8px 10px;
+  color: var(--error);
+  font-size: 13px;
+}
+.message.user:has(.claude-record:first-child) {
+  margin-inline-start: 0;
+}
+.message.user .markdown:has(> .claude-record:first-child) {
+  background: transparent;
+  padding: 0;
+}

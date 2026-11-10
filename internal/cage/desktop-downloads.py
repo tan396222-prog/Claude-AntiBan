@@ -62,6 +62,17 @@ class Downloads:
             return [{key: value for key, value in item.items() if key not in ('sourceName', 'complete')}
                     for item in reversed(list(self.records.values()))]
 
+    def host_visible_path(self, path):
+        """Translate retained SaveFile staging locations to the published file."""
+        with self.lock:
+            for item in self.records.values():
+                source = self.source(item)
+                if path in (str(source), str(source.parent)):
+                    if item['state'] != 'saved':
+                        raise ValueError('文件尚未保存完成，请稍后重试')
+                    return item['path'] if path == str(source) else str(Path(item['path']).parent)
+        return path
+
     def begin(self, name):
         if not valid_name(name):
             raise ValueError('下载文件名无效')

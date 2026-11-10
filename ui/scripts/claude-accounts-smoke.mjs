@@ -100,6 +100,7 @@ async function checkLocalCountdown() {
   await openAccounts();
   const row = page.getByRole("article", { name: "工作", exact: true });
   await row.getByText("5秒后", { exact: true }).waitFor();
+  await row.getByText("最近更新 刚刚", { exact: true }).waitFor();
   await page.getByText("正在请求账号用量…").waitFor({ state: "hidden" });
   const requestsBefore = accountRequests;
   const wavesBefore = usageRequests.filter((r) => r.action === "usage_panel").length;
@@ -121,6 +122,10 @@ async function checkLocalCountdown() {
   assert.equal(joins.length, joinedBefore, "discovering a new default identity during polling cannot enroll it");
   assert.equal(usageRequests.filter((r) => r.action === "usage_panel").length, wavesBefore, "12-second panel polling cannot start another usage query");
   assert.ok(usageRequests.some((r) => !r.action && r.visible), "a visible panel keeps the existing queue alive via GET");
+  await page.clock.runFor(47_000);
+  await row.getByText("最近更新 1分钟前", { exact: true }).waitFor();
+  await page.clock.runFor(240_000);
+  await row.getByText("最近更新 5分钟前", { exact: true }).waitFor();
 }
 
 async function checkUsagePanel() {
@@ -187,7 +192,7 @@ try {
     if (body?.action === "join") {
       joins.push(body);
       if (!defaultLogin || body.identity !== defaultLogin.identity)
-        return route.fulfill({ status: 409, body: "普通终端登录已改变，请确认当前身份" });
+        return route.fulfill({ status: 409, contentType: "text/plain; charset=utf-8", body: "普通终端登录已改变，请确认当前身份" });
       profiles.push({ id: "default-" + defaultLogin.identity, source: "default", label: defaultLogin.email,
         email: defaultLogin.email, plan: defaultLogin.plan, enabled: true, status: "ready" });
     }
@@ -199,7 +204,7 @@ try {
     if (body?.action === "update") Object.assign(profiles.find((a) => a.id === body.id),
       body.label !== undefined ? { label: body.label } : { enabled: body.enabled });
     if (body?.action === "refresh" && failRefresh)
-      return route.fulfill({ status: 503, body: "暂时无法检查登录" });
+      return route.fulfill({ status: 503, contentType: "text/plain; charset=utf-8", body: "暂时无法检查登录" });
     if (body?.action === "refresh" && heldRefresh) await heldRefresh.promise;
     if (body?.action === "refresh_default") {
       assert.equal(body.identity, defaultLogin?.identity);
@@ -215,7 +220,7 @@ try {
     if (!body) return route.fulfill({ json: state.terminals });
     starts.push(body);
     if (body.kind === "claude" && profiles.length && !profiles[assignedProfile].enabled)
-      return route.fulfill({ status: 409, body: "没有可用 Claude 账号" });
+      return route.fulfill({ status: 409, contentType: "text/plain; charset=utf-8", body: "没有可用 Claude 账号" });
     const terminal = { id: String(starts.length), title: "终端 " + starts.length, kind: body.kind,
       workspace: body.workspace, claude_account_id: body.kind === "claude-login" ? body.claude_account_id || "one"
         : body.kind === "claude" ? profiles[assignedProfile]?.id : undefined,
@@ -305,7 +310,11 @@ try {
   await card.getByText("重置时间未知", { exact: true }).waitFor();
   const oldWeek = card.getByRole("group", { name: "7d 额度" }).getByText(/^上次 100% ·/);
   assert.equal(await oldWeek.locator("time").getAttribute("datetime"), new Date((now - 7200) * 1000).toISOString());
-  assert.notEqual((await card.getByText(/^上次查询 /).innerText()).slice(5), (await card.getByText(/^最近读数 /).innerText()).slice(5));
+  const updated = card.getByText(/^最近更新 /);
+  assert.equal(await updated.count(), 1);
+  assert.equal(await updated.locator("time").getAttribute("datetime"), new Date((now - 3600) * 1000).toISOString(),
+    "a newer query must not make retained quota readings appear fresh");
+  assert.equal(await card.getByText(/^(上次查询|最近读数) /).count(), 0);
   heldRefresh = null;
   await back();
   await launchClaude();
@@ -345,6 +354,8 @@ try {
   assert.equal(profiles.length, 1, "detected identity is not in the pool");
   await detectedA.getByRole("button", { name: "检查状态" }).click();
   await detectedA.getByText("本次未返回额度").waitFor();
+  assert.equal(await detectedA.getByText(/^最近更新 /).locator("time").getAttribute("datetime"), new Date(now * 1000).toISOString(),
+    "accounts without readings fall back to the latest query time");
   assert.equal(await detectedA.getByText("暂无读数", { exact: true }).count(), 2);
   assert.deepEqual(usageRequests.filter((r) => r.action === "refresh_default").at(-1), { action: "refresh_default", identity: identityA.identity, visible: false });
   await detectedA.getByRole("button", { name: "加入调度" }).click();

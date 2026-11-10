@@ -2,7 +2,6 @@ import { InlineSelect } from "./inline-select";
 import React, { useEffect, useRef, useState } from "react";
 import {
   Download,
-  Upload,
   Plus,
   Search,
   RefreshCw,
@@ -19,6 +18,8 @@ import {
   Route,
 } from "lucide-react";
 import { api } from "./api";
+import { SafetyMessage } from "./safety-message";
+import { ProxyYAMLInput } from "./proxy-yaml-input";
 import "./proxy.css";
 
 const bytes = (v) => {
@@ -49,7 +50,7 @@ const emptyForm = {
   interval_hours: 24,
   host_download: false,
 };
-export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
+export function ProxySettings({ status, onApplied, onConfirm, onDirty, initializing = false }) {
   const [proxy, setProxy] = useState(null),
     [tab, setTab] = useState("nodes"),
     [search, setSearch] = useState(""),
@@ -75,11 +76,11 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
   const [routeDraft, setRouteDraft] = useState(null);
   const [hostRefresh, setHostRefresh] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [readingFile, setReadingFile] = useState(false);
   const alive = useRef(true),
     loading = useRef(false),
     latest = useRef(null),
     measuring = useRef(false),
-    file = useRef(),
     portDirty = useRef(false);
   const reload = async () => {
     const value = await api("/proxy");
@@ -166,13 +167,23 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
           throw new Error("操作已被其他任务替代，请查看当前状态");
       } while (current.running);
       portDirty.current = false;
-      await reload();
+      const updated = await reload();
       await onApplied();
       if (current.error) throw new Error(current.error);
       if (alive.current) {
         setForm(null);
         if (action === "route" || action === "select") setRouteDraft(null);
-        setNotice(current.message || "已完成");
+        const importedSource =
+          action === "import"
+            ? updated.sources.at(-1)
+            : action === "refresh"
+              ? updated.sources.find((source) => source.id === input.id)
+              : null;
+        setNotice(
+          importedSource
+            ? `已导入 ${importedSource.nodes.length} 个节点，跳过 ${importedSource.skipped?.length || 0} 个${importedSource.skipped?.length ? "；可在来源下查看跳过原因" : ""}`
+            : current.message || "已完成",
+        );
         setDelays({});
       }
     } catch (e) {
@@ -251,11 +262,11 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
   const route = routeDraft ?? savedRoute;
   const routeChanged = JSON.stringify(route) !== JSON.stringify(savedRoute);
   useEffect(() => {
-    onDirty?.(routeChanged);
+    onDirty?.(routeChanged || initializing && Boolean(form));
     return () => onDirty?.(false);
-  }, [onDirty, routeChanged]);
+  }, [onDirty, routeChanged, initializing, Boolean(form)]);
   if (!proxy)
-    return <div className="proxy-loading">{error || "正在读取代理配置…"}</div>;
+    return <div className="proxy-loading" role={error ? "alert" : "status"}>{error || "正在读取代理配置…"}</div>;
   const allNodes = proxy.sources.flatMap((s) =>
     s.nodes.map((n) => ({ ...n, source: s.name, sourceID: s.id })),
   );
@@ -314,8 +325,8 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
                   订阅地址，粘贴后点击「导入并验证」。首次还没有可用节点时，勾选「通过主机网络下载这份订阅」；主机需要能访问该地址。
                 </li>
                 <li>
-                  <strong>本地 YAML：</strong>选择配置文件，或粘贴含节点的 YAML
-                  配置，再点击「导入并验证」。可从已有代理客户端导出配置。
+                  <strong>本地 YAML：</strong>拖入或选择配置文件，或粘贴含节点的
+                  YAML 配置，再点击「导入并验证」。可从已有代理客户端导出配置。
                 </li>
                 <li>
                   <strong>手动节点：</strong>适用于 HTTP CONNECT 或
@@ -332,7 +343,7 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
             <li>
               <strong>确认可以联网</strong>
               <p>
-                回到工作台启动环境，等待网络检查通过。以工作台的联网状态为准；「测速」只检测节点延迟。Cage
+                {initializing ? "点击“开始安装”，等待客机安装和网络检查完成。以初始化界面的检查结果为准；" : "回到工作台启动环境，等待网络检查通过。以工作台的联网状态为准；"}「测速」只检测节点延迟。Cage
                 内的浏览器、终端和开发工具会共用所选节点，无需分别配置代理。
               </p>
             </li>
@@ -575,12 +586,12 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
               </div>
               {proxy.route_error && (
                 <p role="alert" className="proxy-source-error">
-                  {proxy.route_error}
+                  <SafetyMessage message={proxy.route_error} />
                 </p>
               )}
               {error && (
                 <div role="alert" className="error-message">
-                  {error}
+                  <SafetyMessage message={error} />
                 </div>
               )}
             </section>
@@ -752,6 +763,23 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
                 {s.error && (
                   <span className="proxy-source-error">{s.error}</span>
                 )}
+                {s.skipped?.length > 0 && (
+                  <details className="proxy-source-skipped">
+                    <summary>
+                      已导入 {s.nodes.length} 个节点，跳过 {s.skipped.length} 个
+                      · 查看原因
+                    </summary>
+                    <ul>
+                      {s.skipped.map((issue) => (
+                        <li key={issue.index}>
+                          第 {issue.index} 个节点
+                          {issue.name && `「${issue.name}」`}
+                          {issue.type && `（${issue.type}）`}：{issue.reason}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
               </div>
               <div className="proxy-source-actions">
                 {s.remote && (
@@ -894,54 +922,24 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
                 </>
               )}
               {mode === "file" && !form.id && (
-                <>
-                  <input
-                    hidden
-                    type="file"
-                    ref={file}
-                    accept=".yaml,.yml,.json,text/yaml,application/yaml"
-                    onChange={async (e) => {
-                      const value = e.target.files?.[0];
-                      if (!value) return;
-                      if (value.size > 8 * 1024 * 1024) {
-                        setError("文件超过 8 MiB");
-                        return;
-                      }
-                      try {
-                        const content = await value.text();
-                        setForm((old) => ({
-                          ...old,
-                          content,
-                          name: old.name || value.name.replace(/\.[^.]+$/, ""),
-                          interval_hours: 0,
-                        }));
-                      } catch {
-                        setError("文件读取失败，请重新选择");
-                      }
-                    }}
-                  />
-                  <button onClick={() => file.current.click()}>
-                    <Upload size={14} />
-                    选择 YAML 文件
-                  </button>
-                  <label>
-                    或粘贴配置
-                    <textarea
-                      aria-label="节点 YAML"
-                      rows={7}
-                      value={form.content}
-                      onChange={(e) =>
-                        setForm({ ...form, content: e.target.value })
-                      }
-                      spellCheck={false}
-                      placeholder="proxies: …"
-                    />
-                  </label>
-                  <p className="field-help">
-                    只导入节点和明确的代理链，Cage 自行管理
-                    DNS、监听端口及出站规则。
-                  </p>
-                </>
+                <ProxyYAMLInput
+                  content={form.content}
+                  disabled={busy}
+                  onReadingChange={setReadingFile}
+                  onContentChange={(content) =>
+                    setForm((old) => ({ ...old, content }))
+                  }
+                  onFileRead={(value, content) =>
+                    setForm((old) => ({
+                      ...old,
+                      content,
+                      name:
+                        old.name ||
+                        value.name.replace(/\.[^.]+$/, "").slice(0, 100),
+                      interval_hours: 0,
+                    }))
+                  }
+                />
               )}
               {mode === "manual" && !form.id && (
                 <>
@@ -1026,11 +1024,12 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
                   className="primary"
                   disabled={
                     busy ||
+                    readingFile ||
                     (!form.id &&
                       (mode === "url"
                         ? !form.url || !form.name
                         : mode === "file"
-                          ? !form.content || !form.name
+                          ? !form.content.trim() || !form.name
                           : !manual.name || !manual.server))
                   }
                   onClick={submit}
@@ -1144,7 +1143,7 @@ export function ProxySettings({ status, onApplied, onConfirm, onDirty }) {
       )}
       {error && !(tab === "nodes" && allNodes.length > 0) && (
         <div role="alert" className="error-message">
-          {error}
+          <SafetyMessage message={error} />
         </div>
       )}
       {notice && (

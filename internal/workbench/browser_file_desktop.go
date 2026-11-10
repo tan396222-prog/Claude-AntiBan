@@ -7,9 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"time"
 
@@ -123,6 +121,7 @@ func BrowserFileForConnection(configPath, connectionID, action, id, destination 
 		return result, err
 	}
 	defer client.close()
+	client.client.Timeout = 30 * time.Minute
 	entry, _ := url.Parse(client.launch.URL)
 	status, err := client.call("POST", "/api/session", map[string]string{"token": entry.Fragment}, nil)
 	if err != nil || status != 200 {
@@ -192,30 +191,8 @@ func BrowserFileForConnection(configPath, connectionID, action, id, destination 
 			return result, errors.New("文件已移动、删除或无法访问")
 		}
 		file.Close()
-		var cmd *exec.Cmd
-		switch runtime.GOOS {
-		case "darwin":
-			args := []string{"--", result.Path}
-			if action == "reveal" {
-				args = []string{"-R", "--", result.Path}
-			}
-			cmd = exec.Command("/usr/bin/open", args...)
-		case "windows":
-			if action == "reveal" {
-				cmd = exec.Command("explorer.exe", "/select,"+result.Path)
-			} else {
-				cmd = exec.Command("rundll32.exe", "url.dll,FileProtocolHandler", result.Path)
-			}
-		default:
-			path := result.Path
-			if action == "reveal" {
-				path = filepath.Dir(path)
-			}
-			cmd = exec.Command("gio", "open", path)
-		}
-		hideCommand(cmd)
-		if err = cmd.Run(); err != nil {
-			return result, errors.New("无法打开文件，请通过显示的位置手动查看")
+		if err = openHostFile(result.Path, action); err != nil {
+			return result, err
 		}
 	}
 	return result, nil

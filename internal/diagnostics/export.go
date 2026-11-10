@@ -27,12 +27,18 @@ func (s *Store) Export(w io.Writer, version string, guest []byte, guestState str
 			_, err = f.Write(b)
 			return err
 		}
-		meta, _ := json.MarshalIndent(map[string]any{"format": 1, "created_at": s.now().UTC().Format(time.RFC3339), "app_version": version, "os": runtime.GOOS, "arch": runtime.GOARCH, "go_version": runtime.Version(), "retention_days": RetentionDays, "host_max_bytes": MaxBytes, "guest_max_bytes": 10 << 20, "guest_collection": Redact(guestState)}, "", "  ")
+		safety, safetyState := s.safetySnapshot()
+		meta, _ := json.MarshalIndent(map[string]any{"format": 1, "created_at": s.now().UTC().Format(time.RFC3339), "app_version": version, "os": runtime.GOOS, "arch": runtime.GOARCH, "go_version": runtime.Version(), "retention_days": RetentionDays, "host_max_bytes": MaxBytes, "guest_max_bytes": 10 << 20, "guest_collection": Redact(guestState), "safety_collection": safetyState}, "", "  ")
 		if err := add("manifest.json", meta); err != nil {
 			return err
 		}
 		if err := add("README.txt", []byte("Cage diagnostic bundle. Logs are redacted automatically. Review before sharing. No project files, terminal sessions, configuration or browser history are collected. Guest collection is best effort; see manifest.json.\n")); err != nil {
 			return err
+		}
+		if len(safety) > 0 {
+			if err := add("safety/latest-report.json", safety); err != nil {
+				return err
+			}
 		}
 		files, err := s.files()
 		if err != nil {

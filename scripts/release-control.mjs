@@ -43,6 +43,17 @@ async function findRelease(api, base, tag) {
   }
 }
 
+export async function releaseNotes(root, context) {
+  if (!context.notesPath) return '';
+  if (!/^docs\/(?:[A-Za-z0-9_.-]+\/)*[A-Za-z0-9_.-]+\.md$/.test(context.notesPath) || context.notesPath.split('/').some(part => part === '.' || part === '..')) {
+    throw new Error('Release notes must be a committed Markdown file under docs/.');
+  }
+  if (!shaPattern.test(context.sourceSha)) throw new Error('Invalid release notes source.');
+  const body = execFileSync('git', ['show', `${context.sourceSha}:${context.notesPath}`], { cwd: root, encoding: 'utf8', maxBuffer: 1 << 20 }).trim();
+  if (!body || Buffer.byteLength(body) > 100000) throw new Error('Release notes must contain 1–100000 UTF-8 bytes.');
+  return body;
+}
+
 // Build expected version files from the immutable source commit, even when
 // publish is checking out the candidate. This catches unrelated file edits.
 export async function expectedFiles(root, sourceSha, version) {
@@ -82,6 +93,8 @@ export async function verifyCandidate(api, context, expected) {
 
 export async function prepareRelease({ api, root, ...context }) {
   checkContext(context);
+  if (context.requestedVersion) parseVersion(context.requestedVersion);
+  await releaseNotes(root, context);
   const base = apiRoot(context);
   const main = await api('GET', `${base}/git/ref/heads/${context.defaultBranch}`);
   const existing = await optional(api, `${base}/git/ref/heads/${branch(context.runId)}`);
@@ -89,6 +102,7 @@ export async function prepareRelease({ api, root, ...context }) {
     const commit = await api('GET', `${base}/git/commits/${existing.object.sha}`);
     const version = /^chore\(release\): v([^\n]+)\n\nCage-Release-Run: \d+$/.exec(commit.message)?.[1];
     parseVersion(version);
+    if (context.requestedVersion && context.requestedVersion !== version) throw new Error('Existing candidate uses another requested version.');
     if (main.object.sha !== context.sourceSha && main.object.sha !== existing.object.sha) throw new Error('Main advanced; start a new explicitly requested release.');
     const result = { ...context, version, commitSha: existing.object.sha };
     await verifyCandidate(api, result, await expectedFiles(root, context.sourceSha, version));
@@ -103,8 +117,16 @@ export async function prepareRelease({ api, root, ...context }) {
     reserved.push(...releases.map(release => release.tag_name));
     if (releases.length < 100) break;
   }
-  const version = nextVersion(current, context.bump, reserved);
+  const version = context.requestedVersion || nextVersion(current, context.bump, reserved);
   if (compareVersions(version, current) <= 0) throw new Error('Release version must advance.');
+  if (context.requestedVersion) {
+    for (const tag of reserved) {
+      if (!tag.startsWith('v')) continue;
+      let previous;
+      try { previous = parseVersion(tag.slice(1)); } catch { continue; }
+      if (previous && compareVersions(version, tag.slice(1)) <= 0) throw new Error('Requested release version must exceed all reserved versions.');
+    }
+  }
   // Tags and draft Releases reserve their version. Never reuse someone else's draft.
   if (await findRelease(api, base, `v${version}`)) throw new Error(`Release v${version} is already reserved.`);
   const files = await expectedFiles(root, context.sourceSha, version);
@@ -175,6 +197,7 @@ function assertAssets(assets, files) {
 
 export async function publishRelease({ api, upload, promote, root, files, ...context }) {
   checkContext(context);
+  const customNotes = await releaseNotes(root, context);
   await verifyCandidate(api, context, await expectedFiles(root, context.sourceSha, context.version));
   const base = apiRoot(context);
   const main = await api('GET', `${base}/git/ref/heads/${context.defaultBranch}`);
@@ -192,11 +215,11 @@ export async function publishRelease({ api, upload, promote, root, files, ...con
   }
   await promote(context); // Atomic, fast-forward-only main + tag; never force-push.
   if (!release) {
-    const notes = await api('POST', `${base}/releases/generate-notes`, { tag_name: `v${context.version}`, target_commitish: context.commitSha });
+    const notes = customNotes ? { body: customNotes } : await api('POST', `${base}/releases/generate-notes`, { tag_name: `v${context.version}`, target_commitish: context.commitSha });
     release = await api('POST', `${base}/releases`, {
       tag_name: `v${context.version}`, target_commitish: context.commitSha,
       name: `Cage ${context.version}`, draft: true, prerelease: context.version.includes('-'),
-      body: `${marker(context)}\n\n${notes.body || ''}\n\nThree platform builds, package verification and automated checks completed for ${context.commitSha}. Hardware virtualization and real Claude account acceptance are separate checks; see the platform guides.`,
+      body: `${marker(context)}\n\n${notes.body || ''}${customNotes ? '' : `\n\nThree platform builds, package verification and automated checks completed for ${context.commitSha}. Hardware virtualization and real Claude account acceptance are separate checks; see the platform guides.`}`,
     });
   }
   const assets = await api('GET', `${base}/releases/${release.id}/assets?per_page=100`);
@@ -220,6 +243,7 @@ export function workflowContext(env, event) {
     repository: env.GITHUB_REPOSITORY, sourceSha: env.RELEASE_SOURCE_SHA || env.GITHUB_SHA,
     runId: env.GITHUB_RUN_ID, defaultBranch: event.repository?.default_branch, bump: event.inputs?.bump,
     version: env.RELEASE_VERSION, commitSha: env.RELEASE_COMMIT_SHA,
+    requestedVersion: event.inputs?.version?.replace(/^v/, '') || undefined, notesPath: event.inputs?.notes_path || undefined,
   };
   checkContext(context);
   if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_EVENT_NAME !== 'workflow_dispatch' || env.GITHUB_REF !== 'refs/heads/main') {

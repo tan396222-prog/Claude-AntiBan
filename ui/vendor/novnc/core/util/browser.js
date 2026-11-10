@@ -117,7 +117,10 @@ async function _checkWebCodecsH264DecodeSupport() {
     let error = null;
 
     let decoder = new VideoDecoder({
-        output: (frame) => { gotframe = true; },
+        output: (frame) => {
+            gotframe = true;
+            frame.close();
+        },
         error: (e) => { error = e; },
     });
     let chunk = new EncodedVideoChunk({
@@ -126,14 +129,18 @@ async function _checkWebCodecsH264DecodeSupport() {
         data: data,
     });
 
-    decoder.configure(config);
-    decoder.decode(chunk);
     try {
+        decoder.configure(config);
+        decoder.decode(chunk);
         await decoder.flush();
     } catch (e) {
         // Firefox incorrectly throws an exception here
         // https://bugzilla.mozilla.org/show_bug.cgi?id=1932566
         error = e;
+    } finally {
+        if (decoder.state !== 'closed') {
+            decoder.close();
+        }
     }
 
     // Firefox fails to deliver the error on Windows, so we need to

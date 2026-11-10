@@ -85,10 +85,10 @@ replace_once('    clipboardPasteFrom(text) {', '''    // Cage: serialize the cli
             RFB.messages.clientFence(this._sock, (1 << 31) | 1, id);
         });
         if (this._rfbConnectionState !== 'connected') throw new Error('Input disconnected');
-        return action();
+        return action((...key) => this._cageSendKey(...key));
     }
 
-    cagePasteContent(content, pasteImage, valid) {
+    cagePasteContent(content, pasteImage, valid, pasteText) {
         // Reserve the queue before asynchronous host clipboard/image decoding.
         // Keep a rejection handler attached even if an earlier input fails.
         const pending = Promise.resolve(content).then(value => ({value}), error => ({error}));
@@ -97,6 +97,7 @@ replace_once('    clipboardPasteFrom(text) {', '''    // Cage: serialize the cli
             if (error) throw error;
             if (!valid()) throw new Error('Input target changed');
             if (value.png || value.files || value.fileSelection) return this._cageRunInput(() => pasteImage(value));
+            if (pasteText) return this._cageRunInput(() => pasteText(value.text || ''));
             return this._cagePasteText(value.text || '');
         });
     }

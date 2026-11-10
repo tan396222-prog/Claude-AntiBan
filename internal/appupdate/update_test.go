@@ -121,7 +121,7 @@ func TestChecksumListMustAgreeAndBelongToSameRelease(t *testing.T) {
 	}
 }
 func TestPrivateReleaseAndMissingProxyDoNotReportCurrent(t *testing.T) {
-	if _, err := findRelease(context.Background(), responseClient(`{"message":"Not Found"}`, 404), "0.1.0"); err == nil || !strings.Contains(err.Error(), "尚未公开") {
+	if _, err := findRelease(context.Background(), responseClient(`{"message":"Not Found"}`, 404), "0.1.0"); err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer

@@ -59,7 +59,7 @@ func (s *Server) desktopLocalSnapshot() desktopLocalReply {
 	s.mu.Lock()
 	reply.Busy = s.closing || job.Running
 	s.mu.Unlock()
-	if s.remote != nil && s.remote.isRemote() {
+	if len(s.mobileCLI.activeAccounts()) != 0 || (s.remote != nil && s.remote.isRemote()) {
 		reply.Busy = true
 	}
 	if reply.Busy {

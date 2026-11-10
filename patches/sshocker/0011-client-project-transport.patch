@@ -1,0 +1,995 @@
+diff --git a/pkg/reversesshfs/rooted.go b/pkg/reversesshfs/rooted.go
+index 84fb0b2..ab7e0ee 100644
+--- a/pkg/reversesshfs/rooted.go
++++ b/pkg/reversesshfs/rooted.go
+@@ -28,6 +28,7 @@ import (
+ type rootedHandlers struct {
+ 	rootPath      string // slash-separated, cleaned
+ 	root          *os.Root
++	cloud         bool // stricter checks for the remote desktop project transport
+ 	readonly      bool
+ 	readonlyNames []string
+ 	foldedNames   []string // readonlyNames as FoldName gives them
+@@ -110,7 +111,7 @@ func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
+ 	if err != nil {
+ 		return "", err
+ 	}
+-	if h.isReadonlyName(r) || !writableName(r) {
++	if h.isReadonlyName(r) || !writableName(r) || (h.cloud && (r == "." || CloudPathHidden(r))) {
+ 		return "", errDenied
+ 	}
+ 	if lexicalGuard {
+@@ -135,7 +136,7 @@ func (h *rootedHandlers) writableRel(p string, entry bool) (string, error) {
+ var Guard func(root, rel string, entry bool) bool
+ 
+ func (h *rootedHandlers) guard(rel string, entry bool) error {
+-	if Guard != nil && !Guard(h.guardRoot, rel, entry) {
++	if !h.cloud && Guard != nil && !Guard(h.guardRoot, rel, entry) {
+ 		return errDenied
+ 	}
+ 	return nil
+@@ -208,7 +209,7 @@ func (f writableFile) WriteAt(b []byte, off int64) (int, error) {
+ }
+ 
+ func (h *rootedHandlers) openWritable(r *sftp.Request) (writableFile, error) {
+-	if r.Pflags().Creat {
++	if !h.cloud && r.Pflags().Creat {
+ 		h.creating(r.Filepath)
+ 	}
+ 	f, err := h.openFile(r)
+@@ -412,11 +413,12 @@ func (h *rootedHandlers) RealPath(p string) (string, error) {
+ // by the path f was opened with, which the client could have made a symlink to a folder
+ // outside the root), so the entries are those of f whatever it was renamed to.
+ type dirLister struct {
+-	mu   sync.Mutex
+-	f    *os.File
+-	buf  []os.FileInfo // read, not listed yet
+-	next int64         // offset of buf[0]
+-	eof  bool
++	cloud bool
++	mu    sync.Mutex
++	f     *os.File
++	buf   []os.FileInfo // read, not listed yet
++	next  int64         // offset of buf[0]
++	eof   bool
+ }
+ 
+ func (d *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+@@ -427,6 +429,11 @@ func (d *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+ 	}
+ 	for len(d.buf) < len(ls) && !d.eof {
+ 		fis, err := d.f.Readdir(len(ls) - len(d.buf))
++		if d.cloud {
++			fis = slices.DeleteFunc(fis, func(info os.FileInfo) bool {
++				return CloudPathHidden(info.Name()) || !(info.IsDir() || info.Mode().IsRegular())
++			})
++		}
+ 		d.buf = append(d.buf, fis...)
+ 		if errors.Is(err, io.EOF) {
+ 			d.eof = true
+@@ -444,7 +451,11 @@ func (d *dirLister) ListAt(ls []os.FileInfo, offset int64) (int, error) {
+ }
+ 
+ func (d *dirLister) Close() error {
+-	return d.f.Close()
++	err := d.f.Close()
++	if d.cloud {
++		<-cloudSlots
++	}
++	return err
+ }
+ 
+ type listerAt []os.FileInfo
+diff --git a/pkg/reversesshfs/rooted_darwin.go b/pkg/reversesshfs/rooted_darwin.go
+index 589c215..624cbdf 100644
+--- a/pkg/reversesshfs/rooted_darwin.go
++++ b/pkg/reversesshfs/rooted_darwin.go
+@@ -37,3 +37,24 @@ func fchmodatNoFollow(dirfd int, base string, mode uint32) error {
+ 	}
+ 	return unix.Fchmodat(dirfd, base, mode, unix.AT_SYMLINK_NOFOLLOW)
+ }
++
++// Open each component without following links and keep the client on the
++// selected volume. Truncation is deferred until the descriptor is checked.
++func cloudOpenat(fd int, name string, flags int, mode uint32) (int, error) {
++	next, err := unix.Openat(fd, name, flags, mode)
++	if err != nil {
++		return -1, err
++	}
++	var parent, child unix.Stat_t
++	if err = unix.Fstat(fd, &parent); err == nil {
++		err = unix.Fstat(next, &child)
++	}
++	if err == nil && parent.Dev != child.Dev {
++		err = unix.EXDEV
++	}
++	if err != nil {
++		unix.Close(next)
++		return -1, err
++	}
++	return next, nil
++}
+diff --git a/pkg/reversesshfs/rooted_linux.go b/pkg/reversesshfs/rooted_linux.go
+index 2ae2e83..344d435 100644
+--- a/pkg/reversesshfs/rooted_linux.go
++++ b/pkg/reversesshfs/rooted_linux.go
+@@ -56,3 +56,12 @@ func fchmodatOPath(dirfd int, base string, mode uint32) error {
+ 	}
+ 	return unix.Chmod("/proc/self/fd/"+strconv.Itoa(fd), mode)
+ }
++
++// NO_XDEV also catches a bind mount pointing outside the authorized directory
++// on the same filesystem. Kernels without openat2 fail closed.
++func cloudOpenat(fd int, name string, flags int, mode uint32) (int, error) {
++	if flags&unix.O_CREAT == 0 {
++		mode = 0
++	}
++	return unix.Openat2(fd, name, &unix.OpenHow{Flags: uint64(flags), Mode: uint64(mode), Resolve: unix.RESOLVE_NO_XDEV | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_BENEATH})
++}
+diff --git a/pkg/reversesshfs/rooted_unix.go b/pkg/reversesshfs/rooted_unix.go
+index 6515874..cfa3104 100644
+--- a/pkg/reversesshfs/rooted_unix.go
++++ b/pkg/reversesshfs/rooted_unix.go
+@@ -81,7 +81,7 @@ func (h *rootedHandlers) openParent(rel string) (int, string, error) {
+ 				unix.Close(fd)
+ 				return -1, "", unix.EACCES
+ 			}
+-			next, err := unix.Openat(fd, c, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
++			next, err := h.openat(fd, c, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK, 0)
+ 			unix.Close(fd)
+ 			if err != nil {
+ 				return -1, "", err
+@@ -114,7 +114,7 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 	if pf.Creat {
+ 		flags |= unix.O_CREAT
+ 	}
+-	if pf.Trunc {
++	if pf.Trunc && !h.cloud {
+ 		flags |= unix.O_TRUNC
+ 	}
+ 	if pf.Excl {
+@@ -131,18 +131,24 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 	defer unix.Close(dirfd)
+ 	// O_NONBLOCK: a FIFO would block the server, which handles one request at a time.
+ 	// It has no effect on regular files, the only ones served.
+-	fd, err := unix.Openat(dirfd, base, flags|unix.O_NONBLOCK, mode)
++	fd, err := h.openat(dirfd, base, flags|unix.O_NONBLOCK, mode)
+ 	if err != nil {
+ 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
+ 	}
+ 	var st unix.Stat_t
+-	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG {
++	if err := unix.Fstat(fd, &st); err != nil || st.Mode&unix.S_IFMT != unix.S_IFREG || (h.cloud && st.Nlink != 1) {
+ 		unix.Close(fd)
+ 		if err == nil {
+ 			err = errDenied
+ 		}
+ 		return nil, &os.PathError{Op: "open", Path: r.Filepath, Err: err}
+ 	}
++	if h.cloud && pf.Trunc {
++		if err := unix.Ftruncate(fd, 0); err != nil {
++			unix.Close(fd)
++			return nil, err
++		}
++	}
+ 	return os.NewFile(uintptr(fd), r.Filepath), nil
+ }
+ 
+@@ -332,3 +338,11 @@ func (h *rootedHandlers) StatVFS(r *sftp.Request) (*sftp.StatVFS, error) {
+ 	}
+ 	return statVFS(&st), nil
+ }
++
++// Cloud shares stop at nested mounts, including when walking parent directories.
++func (h *rootedHandlers) openat(fd int, name string, flags int, mode uint32) (int, error) {
++	if h.cloud {
++		return cloudOpenat(fd, name, flags, mode)
++	}
++	return unix.Openat(fd, name, flags, mode)
++}
+diff --git a/pkg/reversesshfs/rooted_windows.go b/pkg/reversesshfs/rooted_windows.go
+index e4c87c1..cf67ab0 100644
+--- a/pkg/reversesshfs/rooted_windows.go
++++ b/pkg/reversesshfs/rooted_windows.go
+@@ -193,6 +193,9 @@ func (h *rootedHandlers) checkHandle(fh windows.Handle) error {
+ 	if err != nil {
+ 		return err
+ 	}
++	if h.cloud && CloudPathHidden(rel) {
++		return errDenied
++	}
+ 	if rel == "." {
+ 		return nil
+ 	}
+@@ -356,6 +359,14 @@ func (h *rootedHandlers) openFile(r *sftp.Request) (*os.File, error) {
+ 		windows.CloseHandle(fh)
+ 		return nil, err
+ 	}
++	if h.cloud {
++		var fi windows.ByHandleFileInformation
++		err := windows.GetFileInformationByHandle(fh, &fi)
++		if err != nil || fi.NumberOfLinks != 1 || fi.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE) != 0 {
++			windows.CloseHandle(fh)
++			return nil, errDenied
++		}
++	}
+ 	if pf.Trunc {
+ 		if err := windows.Ftruncate(fh, 0); err != nil {
+ 			windows.CloseHandle(fh)
+diff --git a/pkg/reversesshfs/cloud.go b/pkg/reversesshfs/cloud.go
+new file mode 100644
+index 0000000..478459c
+--- /dev/null
++++ b/pkg/reversesshfs/cloud.go
+@@ -0,0 +1,275 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"errors"
++	"io"
++	"os"
++	"path"
++	"path/filepath"
++	"strings"
++	"sync"
++
++	"github.com/pkg/sftp"
++)
++
++// CloudShare pins one local directory for one authenticated client-initiated
++// stream. Only a virtual "/" is visible to the peer. The caller authorizes and
++// validates the physical project directory before creating this grant.
++type CloudShare struct {
++	mu       sync.Mutex
++	handlers *cloudHandlers
++	stream   io.ReadWriteCloser
++	done     chan struct{}
++	closed   bool
++}
++
++// OpenCloudShare expects an absolute, symlink-resolved path supplied by the local picker.
++func OpenCloudShare(directory string, readOnly bool) (*CloudShare, error) {
++	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || filepath.Dir(directory) == directory || CloudPathHidden(filepath.ToSlash(directory)) {
++		return nil, os.ErrPermission
++	}
++	sys, err := openCloudRoot(directory)
++	if err != nil {
++		return nil, err
++	}
++	h := &cloudHandlers{&rootedHandlers{rootPath: "/", guardRoot: directory, rootedSys: sys, readonly: readOnly, cloud: true}}
++	return &CloudShare{handlers: h}, nil
++}
++
++// Serve consumes stream, including when the grant has already been revoked.
++func (c *CloudShare) Serve(stream io.ReadWriteCloser) error {
++	c.mu.Lock()
++	if c.closed || c.stream != nil {
++		c.mu.Unlock()
++		stream.Close()
++		return os.ErrClosed
++	}
++	c.stream, c.done = stream, make(chan struct{})
++	h := c.handlers
++	c.mu.Unlock()
++
++	srv := sftp.NewRequestServer(stream, sftp.Handlers{FileGet: h, FilePut: h, FileCmd: h, FileList: h},
++		sftp.WithRSSequential(), sftp.WithRSMaxHandles(64), sftp.WithRSMaxTxPacket(64*1024))
++	err := srv.Serve()
++	stream.Close()
++	c.mu.Lock()
++	h.rootedSys.close()
++	c.closed = true
++	close(c.done)
++	c.mu.Unlock()
++	return err
++}
++
++// Close revokes the grant and waits until buffered requests and open file
++// handles have been retired. A closed grant cannot attach to another stream.
++func (c *CloudShare) Close() error {
++	c.mu.Lock()
++	if c.stream == nil {
++		defer c.mu.Unlock()
++		if c.closed {
++			return nil
++		}
++		c.closed = true
++		return c.handlers.rootedSys.close()
++	}
++	stream, done, closed := c.stream, c.done, c.closed
++	c.closed = true
++	c.mu.Unlock()
++	if !closed {
++		stream.Close()
++	}
++	<-done
++	return nil
++}
++
++// CloudPathHidden reports whether the file policy withholds this relative
++// path, including credential stores, Git history and host hooks.
++// This filename policy cannot identify secrets embedded in ordinary source.
++func CloudPathHidden(rel string) bool {
++	for _, name := range strings.Split(rel, "/") {
++		n := FoldName(name)
++		switch n {
++		case ".git", ".hg", ".sl", ".jj", ".ssh", ".gnupg", ".aws", ".kube", ".azure", ".docker", ".config", ".claude-cage", ".agent-vm", ".lima",
++			".env", ".envrc", ".netrc", "_netrc", ".npmrc", ".pypirc", ".git-credentials", ".gitconfig", ".gitmodules",
++			".claude", ".codex", ".cursor", ".vscode", ".idea", ".zed", ".gemini", ".devcontainer", ".devcontainer.json",
++			".dir-locals.el", ".mcp.json", ".githooks", ".husky", ".pre-commit-config.yaml",
++			".yarn", ".yarnrc.yml", ".pnpmfile.cjs", ".cargo", ".lfsconfig", ".mise", "mise.toml", "mise.local.toml", ".mise.toml", ".mise.local.toml",
++			"lefthook.yml", ".lefthook.yml", "lefthook.yaml", ".lefthook.yaml", "lefthook-local.yml", ".lefthook-local.yml",
++			"..namedfork", "desktop.ini", ".ds_store":
++			return true
++		}
++		if strings.HasPrefix(n, ".env.") || strings.HasPrefix(n, "id_rsa") || strings.HasPrefix(n, "id_ed25519") || strings.HasPrefix(n, "id_ecdsa") || strings.HasPrefix(n, "id_dsa") {
++			return true
++		}
++		switch path.Ext(n) {
++		case ".pem", ".key", ".p12", ".pfx", ".ppk", ".lnk", ".url", ".scf", ".library-ms", ".searchconnector-ms":
++			return true
++		}
++	}
++	return false
++}
++
++// Use the confined server's handle-relative writes. All reads and metadata
++// requests use the same no-follow path walk, including the leaf. An internal
++// symlink could otherwise expose a protected path under another name.
++type cloudHandlers struct{ *rootedHandlers }
++
++func (h *cloudHandlers) accessible(p string) (string, error) {
++	rel, err := h.rel(p)
++	if err != nil || !writableName(rel) || CloudPathHidden(rel) {
++		return "", errDenied
++	}
++	return rel, nil
++}
++
++// One desktop process can serve several grants. Bound long-lived descriptors
++// across all of them, leaving room for the SSH connections and the workbench.
++var cloudSlots = make(chan struct{}, 128)
++
++func acquireCloudSlot() error {
++	select {
++	case cloudSlots <- struct{}{}:
++		return nil
++	default:
++		return errors.New("too many open project files")
++	}
++}
++
++type cloudFile struct {
++	writableFile
++	writable bool
++}
++
++func (f cloudFile) Close() error {
++	err := f.File.Close()
++	<-cloudSlots
++	return err
++}
++
++func (h *cloudHandlers) fileHandle(r *sftp.Request, write bool) (cloudFile, error) {
++	if err := acquireCloudSlot(); err != nil {
++		return cloudFile{}, err
++	}
++	var f writableFile
++	var err error
++	if write {
++		f, err = h.openWritable(r)
++	} else {
++		var rel string
++		if rel, err = h.accessible(r.Filepath); err == nil {
++			f.File, err = h.cloudOpenRead(rel)
++		}
++	}
++	if err != nil {
++		<-cloudSlots
++		return cloudFile{}, err
++	}
++	return cloudFile{writableFile: f, writable: write}, nil
++}
++
++func (h *cloudHandlers) Fileread(r *sftp.Request) (io.ReaderAt, error)  { return h.fileHandle(r, false) }
++func (h *cloudHandlers) Filewrite(r *sftp.Request) (io.WriterAt, error) { return h.fileHandle(r, true) }
++func (h *cloudHandlers) OpenFile(r *sftp.Request) (sftp.WriterAtReaderAt, error) {
++	return h.fileHandle(r, true)
++}
++
++func (h *cloudHandlers) Filelist(r *sftp.Request) (sftp.ListerAt, error) {
++	rel, err := h.accessible(r.Filepath)
++	if err != nil {
++		return nil, err
++	}
++	if r.Method == "Stat" {
++		if file, ok := r.HandleFile().(interface{ Stat() (os.FileInfo, error) }); ok {
++			info, err := file.Stat()
++			if err != nil {
++				return nil, err
++			}
++			return listerAt{info}, nil
++		}
++	}
++	f, err := h.cloudOpenRead(rel)
++	if err != nil {
++		return nil, err
++	}
++	if r.Method == "List" {
++		if err := acquireCloudSlot(); err != nil {
++			f.Close()
++			return nil, err
++		}
++		return &dirLister{f: f, cloud: true}, nil
++	}
++	defer f.Close()
++	info, err := f.Stat()
++	if err != nil {
++		return nil, err
++	}
++	return listerAt{info}, nil
++}
++
++func (h *cloudHandlers) Lstat(r *sftp.Request) (sftp.ListerAt, error) { return h.Filelist(r) }
++func (h *cloudHandlers) Readlink(string) (string, error)              { return "", errDenied }
++func (h *cloudHandlers) RealPath(p string) (string, error) {
++	rel, err := h.accessible(p)
++	if err != nil {
++		return "", err
++	}
++	return path.Join("/", rel), nil
++}
++
++func (h *cloudHandlers) Filecmd(r *sftp.Request) error {
++	switch r.Method {
++	case "Setstat":
++		if h.readonly || r.AttrFlags().UidGid {
++			return errDenied
++		}
++		if f, ok := r.HandleFile().(cloudFile); ok && f.writable {
++			return h.fsetstat(f.File, r)
++		}
++		// A read handle cannot acquire write access through FSETSTAT.
++		if r.HandleFile() != nil {
++			return errDenied
++		}
++		f, err := h.openFile(&sftp.Request{Filepath: r.Filepath, Flags: 2 /* SSH_FXF_WRITE */})
++		if err != nil {
++			return err
++		}
++		defer f.Close()
++		return h.fsetstat(f, r)
++	case "Rename":
++		return h.rename(r, true)
++	case "Remove", "Rmdir":
++		return h.remove(r)
++	case "Mkdir":
++		return h.mkdir(r)
++	default:
++		// Refuse both hard-link and symbolic-link creation.
++		return errDenied
++	}
++}
++
++// The remote environment owns its own disk reports; querying the desktop
++// volume via an SFTP extension would disclose unrelated host information.
++func (h *cloudHandlers) StatVFS(*sftp.Request) (*sftp.StatVFS, error) {
++	return nil, sftp.ErrSSHFxOpUnsupported
++}
++
++func (h *cloudHandlers) PosixRename(r *sftp.Request) error { return h.rename(r, false) }
++
++// MatchesRoot compares the directory as picked before validation with the one
++// actually held by this grant. Replacing the picker path invalidates the grant.
++func (c *CloudShare) MatchesRoot(selected os.FileInfo) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.closed || selected == nil {
++		return false
++	}
++	f, err := c.handlers.cloudOpenRead(".")
++	if err != nil {
++		return false
++	}
++	defer f.Close()
++	info, err := f.Stat()
++	return err == nil && info.IsDir() && os.SameFile(info, selected)
++}
+diff --git a/pkg/reversesshfs/cloud_test.go b/pkg/reversesshfs/cloud_test.go
+new file mode 100644
+index 0000000..90edff5
+--- /dev/null
++++ b/pkg/reversesshfs/cloud_test.go
+@@ -0,0 +1,244 @@
++//go:build linux || darwin || windows
++
++package reversesshfs
++
++import (
++	"errors"
++	"io"
++	"net"
++	"os"
++	"path/filepath"
++	"runtime"
++	"slices"
++	"testing"
++
++	"github.com/pkg/sftp"
++)
++
++func cloudClient(t *testing.T, directory string, ro bool) (*CloudShare, *sftp.Client) {
++	t.Helper()
++	dir, err := filepath.EvalSymlinks(directory)
++	if err != nil {
++		t.Fatal(err)
++	}
++	grant, err := OpenCloudShare(dir, ro)
++	if err != nil {
++		t.Fatal(err)
++	}
++	info, err := os.Stat(dir)
++	if err != nil || !grant.MatchesRoot(info) {
++		t.Fatal("grant does not match selected directory", err)
++	}
++	a, b := net.Pipe()
++	t.Cleanup(func() { b.Close(); grant.Close() })
++	go grant.Serve(a)
++	c, err := sftp.NewClientPipe(b, b)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return grant, c
++}
++
++func TestCloudProjectLifecycle(t *testing.T) {
++	root := t.TempDir()
++	hostFile := filepath.Join(root, "source.go")
++	if err := os.WriteFile(hostFile, []byte("before"), 0644); err != nil {
++		t.Fatal(err)
++	}
++	grant, c := cloudClient(t, root, false)
++	f, err := c.Open("/source.go")
++	if err != nil {
++		t.Fatal(err)
++	}
++	data, err := io.ReadAll(f)
++	if err != nil || string(data) != "before" {
++		t.Fatalf("remote read = %q, %v", data, err)
++	}
++	f.Close()
++	if err = c.Mkdir("/src"); err != nil {
++		t.Fatal(err)
++	}
++	tmp, err := c.Create("/src/save")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = tmp.Write([]byte("after")); err != nil {
++		t.Fatal(err)
++	}
++	if err = tmp.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if err = c.PosixRename("/src/save", "/source.go"); err != nil {
++		t.Fatal(err)
++	}
++	data, err = os.ReadFile(hostFile)
++	if err != nil || string(data) != "after" {
++		t.Fatalf("local read = %q, %v", data, err)
++	}
++	open, err := c.OpenFile("/source.go", os.O_WRONLY)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = grant.Close(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = open.Write([]byte("revoked")); err == nil {
++		t.Fatal("revoked open handle wrote")
++	}
++	if _, err = c.Stat("/source.go"); err == nil {
++		t.Fatal("revoked grant usable")
++	}
++}
++
++func TestCloudHostileClient(t *testing.T) {
++	tmp := t.TempDir()
++	root := filepath.Join(tmp, "project")
++	if err := os.MkdirAll(filepath.Join(root, ".Git"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	out := filepath.Join(tmp, "outside")
++	for _, name := range []string{out, filepath.Join(root, ".eNv.production"), filepath.Join(root, ".Git", "config")} {
++		if err := os.WriteFile(name, []byte("private"), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	hard := filepath.Join(root, "alias")
++	if err := os.Link(out, hard); err != nil {
++		t.Fatal(err)
++	}
++	if runtime.GOOS != "windows" {
++		if err := os.Symlink(out, filepath.Join(root, "symlink")); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.Symlink(".Git", filepath.Join(root, "inner")); err != nil {
++			t.Fatal(err)
++		}
++	}
++	_, c := cloudClient(t, root, false)
++	for _, p := range []string{"../outside", "/alias", "/symlink", "/inner/config", "/.Git/config", "/.eNv.production", "/id_ed25519", "/file.key"} {
++		if _, err := c.Open(p); err == nil {
++			t.Fatalf("opened %s", p)
++		}
++	}
++	for _, p := range []string{"/alias", "/.Git/config", "/.eNv.production", "/id_ed25519", "/file.key"} {
++		if _, err := c.Create(p); err == nil {
++			t.Fatalf("created/truncated %s", p)
++		}
++		if err := c.Truncate(p, 0); err == nil {
++			t.Fatalf("truncate %s", p)
++		}
++	}
++	if err := c.Link("/alias", "/link"); err == nil {
++		t.Fatal("hard link created")
++	}
++	if err := c.Symlink("../outside", "/link"); err == nil {
++		t.Fatal("symlink created")
++	}
++	if err := c.PosixRename("/alias", "/.env"); err == nil {
++		t.Fatal("replaced secret")
++	}
++	files, err := c.ReadDir("/")
++	if err != nil {
++		t.Fatal(err)
++	}
++	if slices.ContainsFunc(files, func(fi os.FileInfo) bool { return CloudPathHidden(fi.Name()) }) {
++		t.Fatal("listed protected file")
++	}
++	content, err := os.ReadFile(out)
++	if err != nil || string(content) != "private" {
++		t.Fatal("outside data changed", err)
++	}
++}
++
++func TestCloudReadOnlyAndRootReplacement(t *testing.T) {
++	original := t.TempDir()
++	if err := os.WriteFile(filepath.Join(original, "allowed"), []byte("ok"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	g, c := cloudClient(t, original, true)
++	if _, err := c.Create("/new"); err == nil {
++		t.Fatal("created on read-only grant")
++	}
++	if err := c.Remove("/allowed"); err == nil {
++		t.Fatal("removed on read-only grant")
++	}
++	if err := c.Mkdir("/dir"); err == nil {
++		t.Fatal("mkdir on read-only grant")
++	}
++	other, err := os.Stat(t.TempDir())
++	if err != nil || g.MatchesRoot(other) {
++		t.Fatal("root identity accepted replacement", err)
++	}
++	if runtime.GOOS != "windows" {
++		if err := os.Rename(original, original+"-old"); err != nil {
++			t.Fatal(err)
++		}
++		t.Cleanup(func() { os.RemoveAll(original + "-old") })
++		if err := os.Mkdir(original, 0700); err != nil {
++			t.Fatal(err)
++		}
++		if _, err := c.Stat("/allowed"); err != nil {
++			t.Fatal("lost pinned root", err)
++		}
++		if err := os.WriteFile(filepath.Join(original, "replacement"), []byte("private"), 0600); err != nil {
++			t.Fatal(err)
++		}
++		if _, err := c.Open("/replacement"); err == nil {
++			t.Fatal("followed replacement root")
++		}
++	}
++}
++
++func TestCloudRefusesReusingRevokedGrant(t *testing.T) {
++	dir, err := filepath.EvalSymlinks(t.TempDir())
++	if err != nil {
++		t.Fatal(err)
++	}
++	g, err := OpenCloudShare(dir, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := g.Close(); err != nil {
++		t.Fatal(err)
++	}
++	a, b := net.Pipe()
++	defer b.Close()
++	if !errors.Is(g.Serve(a), os.ErrClosed) {
++		t.Fatal("accepted revoked grant")
++	}
++}
++
++func TestCloudOpenFilesBoundAcrossShares(t *testing.T) {
++	root := t.TempDir()
++	if err := os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	grants := make([]*CloudShare, 0, 3)
++	clients := make([]*sftp.Client, 0, 3)
++	for range 3 {
++		g, c := cloudClient(t, root, true)
++		grants = append(grants, g)
++		clients = append(clients, c)
++	}
++	for _, client := range clients[:2] {
++		for range 64 {
++			if _, err := client.Open("/f"); err != nil {
++				t.Fatal(err)
++			}
++		}
++		if _, err := client.Open("/f"); err == nil {
++			t.Fatal("per-stream handle cap bypassed")
++		}
++	}
++	if _, err := clients[2].Open("/f"); err == nil {
++		t.Fatal("process-wide handle cap bypassed")
++	}
++	if err := grants[0].Close(); err != nil {
++		t.Fatal(err)
++	}
++	f, err := clients[2].Open("/f")
++	if err != nil {
++		t.Fatal("revocation leaked file handles", err)
++	}
++	f.Close()
++}
+diff --git a/pkg/reversesshfs/cloud_unix.go b/pkg/reversesshfs/cloud_unix.go
+new file mode 100644
+index 0000000..15b9584
+--- /dev/null
++++ b/pkg/reversesshfs/cloud_unix.go
+@@ -0,0 +1,52 @@
++//go:build linux || darwin
++
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++
++	"golang.org/x/sys/unix"
++)
++
++// Start at the volume root, so replacing any component of the picker result
++// with a symlink while the grant is being opened cannot redirect it.
++func openCloudRoot(directory string) (rootedSys, error) {
++	const flags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC | unix.O_NONBLOCK
++	fd, err := unix.Open("/", flags, 0)
++	if err != nil {
++		return rootedSys{}, err
++	}
++	for _, c := range strings.Split(strings.TrimPrefix(filepath.Clean(directory), "/"), "/") {
++		next, err := unix.Openat(fd, c, flags, 0)
++		unix.Close(fd)
++		if err != nil {
++			return rootedSys{}, err
++		}
++		fd = next
++	}
++	return rootedSys{rootFD: fd}, nil
++}
++
++func (h *rootedHandlers) cloudOpenRead(rel string) (*os.File, error) {
++	parent, base, err := h.openParent(rel)
++	if err != nil {
++		return nil, err
++	}
++	defer unix.Close(parent)
++	fd, err := cloudOpenat(parent, base, unix.O_NOFOLLOW|unix.O_CLOEXEC|unix.O_NONBLOCK|unix.O_RDONLY, 0)
++	if err != nil {
++		return nil, err
++	}
++	var st unix.Stat_t
++	err = unix.Fstat(fd, &st)
++	if err == nil && st.Mode&unix.S_IFMT != unix.S_IFDIR && (st.Mode&unix.S_IFMT != unix.S_IFREG || st.Nlink != 1) {
++		err = errDenied
++	}
++	if err != nil {
++		unix.Close(fd)
++		return nil, err
++	}
++	return os.NewFile(uintptr(fd), rel), nil
++}
+diff --git a/pkg/reversesshfs/cloud_unix_test.go b/pkg/reversesshfs/cloud_unix_test.go
+new file mode 100644
+index 0000000..848aadc
+--- /dev/null
++++ b/pkg/reversesshfs/cloud_unix_test.go
+@@ -0,0 +1,115 @@
++//go:build darwin || linux
++
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++
++	"golang.org/x/sys/unix"
++)
++
++// Even when the client races normal file edits, neither the read nor the
++// write path may follow the replacement symlink (including on truncation).
++func TestCloudLinkSwapAndFifo(t *testing.T) {
++	tmp := t.TempDir()
++	outside, root := filepath.Join(tmp, "outside"), filepath.Join(tmp, "working")
++	if err := os.Mkdir(root, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := unix.Mkfifo(filepath.Join(root, "fifo"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	_, c := cloudClient(t, root, false)
++	if _, err := c.Open("/fifo"); err == nil {
++		t.Fatal("read FIFO opened")
++	}
++	if _, err := c.OpenFile("/fifo", os.O_WRONLY); err == nil {
++		t.Fatal("write FIFO opened")
++	}
++
++	swapped := filepath.Join(root, "swapped")
++	done := make(chan struct{})
++	raceErr := make(chan error, 1)
++	go func() {
++		for {
++			select {
++			case <-done:
++				raceErr <- nil
++				return
++			default:
++			}
++			link, regular := filepath.Join(root, "link-temp"), filepath.Join(root, "regular-temp")
++			if err := os.Symlink(outside, link); err != nil {
++				raceErr <- err
++				return
++			}
++			if err := os.Rename(link, swapped); err != nil {
++				raceErr <- err
++				return
++			}
++			if err := os.WriteFile(regular, []byte("public"), 0600); err != nil {
++				raceErr <- err
++				return
++			}
++			if err := os.Rename(regular, swapped); err != nil {
++				raceErr <- err
++				return
++			}
++		}
++	}()
++	defer func() {
++		close(done)
++		if err := <-raceErr; err != nil {
++			t.Error(err)
++		}
++	}()
++	for range 256 {
++		f, err := c.Open("/swapped")
++		if err == nil {
++			buf := make([]byte, 7)
++			n, _ := f.Read(buf)
++			f.Close()
++			if string(buf[:n]) == "secret" {
++				t.Fatal("read outside the grant")
++			}
++		}
++		if f, err := c.OpenFile("/swapped", os.O_WRONLY|os.O_TRUNC); err == nil {
++			f.Close()
++		}
++	}
++	b, err := os.ReadFile(outside)
++	if err != nil || string(b) != "secret" {
++		t.Fatalf("outside file changed, %q %v", b, err)
++	}
++}
++
++func TestCloudNeverSetsPrivilegeBits(t *testing.T) {
++	dir := t.TempDir()
++	_, c := cloudClient(t, dir, false)
++	f, err := c.Create("/program")
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer f.Close()
++	mode := os.FileMode(0755) | os.ModeSetuid | os.ModeSetgid | os.ModeSticky
++	check := func() {
++		t.Helper()
++		info, err := os.Stat(filepath.Join(dir, "program"))
++		if err != nil || info.Mode()&(os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0 || info.Mode().Perm() != 0755 {
++			t.Fatalf("unexpected host mode: %v %v", info, err)
++		}
++	}
++	if err := f.Chmod(mode); err != nil {
++		t.Fatal(err)
++	}
++	check()
++	if err := c.Chmod("/program", mode); err != nil {
++		t.Fatal(err)
++	}
++	check()
++}
+diff --git a/pkg/reversesshfs/cloud_windows.go b/pkg/reversesshfs/cloud_windows.go
+new file mode 100644
+index 0000000..cab2ff7
+--- /dev/null
++++ b/pkg/reversesshfs/cloud_windows.go
+@@ -0,0 +1,61 @@
++package reversesshfs
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++
++	"golang.org/x/sys/windows"
++)
++
++// Open an absolute local drive path from its volume root. DONT_REPARSE applies
++// to all remaining components, so junctions cannot redirect the grant.
++func openCloudRoot(directory string) (rootedSys, error) {
++	dir := filepath.Clean(directory)
++	drive := filepath.VolumeName(dir)
++	if len(drive) != 2 || drive[1] != ':' {
++		return rootedSys{}, errDenied
++	}
++	base, err := openRootedSys(drive + `\`)
++	if err != nil {
++		return rootedSys{}, err
++	}
++	defer base.close()
++	h, err := ntCreate(base.rootHandle, strings.TrimPrefix(dir[len(drive):], `\`), fileDirectoryAccess, 0, windows.FILE_OPEN, windows.FILE_DIRECTORY_FILE, windows.OBJ_DONT_REPARSE)
++	if err != nil {
++		return rootedSys{}, err
++	}
++	name, err := normalizedName(h)
++	if err != nil || CloudPathHidden(filepath.ToSlash(name)) {
++		windows.CloseHandle(h)
++		return rootedSys{}, errDenied
++	}
++	return rootedSys{localPath: dir, rootHandle: h, rootName: name}, nil
++}
++
++func (h *rootedHandlers) cloudOpenRead(rel string) (*os.File, error) {
++	var fh windows.Handle
++	var err error
++	if rel == "." {
++		self := windows.CurrentProcess()
++		err = windows.DuplicateHandle(self, h.rootHandle, self, &fh, 0, false, windows.DUPLICATE_SAME_ACCESS)
++	} else {
++		fh, err = ntCreate(h.rootHandle, filepath.FromSlash(rel), windows.FILE_GENERIC_READ, 0, windows.FILE_OPEN, 0, windows.OBJ_DONT_REPARSE)
++	}
++	if err != nil {
++		return nil, err
++	}
++	err = h.checkHandle(fh)
++	var fi windows.ByHandleFileInformation
++	if err == nil {
++		err = windows.GetFileInformationByHandle(fh, &fi)
++	}
++	if err == nil && (fi.FileAttributes&(windows.FILE_ATTRIBUTE_REPARSE_POINT|windows.FILE_ATTRIBUTE_DEVICE) != 0 || (fi.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 && fi.NumberOfLinks != 1)) {
++		err = errDenied
++	}
++	if err != nil {
++		windows.CloseHandle(fh)
++		return nil, err
++	}
++	return os.NewFile(uintptr(fh), rel), nil
++}

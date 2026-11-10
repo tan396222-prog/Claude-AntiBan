@@ -16,7 +16,10 @@ func GuestRunner() string {
 	return "#!/usr/bin/python3\n" + `import json, os, re, signal, subprocess, sys
 rules = [(re.compile(pattern), replacement) for pattern, replacement in json.loads(` + string(mustJSON(string(b))) + `)]
 child = subprocess.Popen(sys.argv[1:], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+stopped_signal = 0
 def stop(sig, _frame):
+    global stopped_signal
+    stopped_signal = sig
     try:
         child.send_signal(sig)
     except ProcessLookupError:
@@ -44,6 +47,8 @@ while True:
         line = pattern.sub(lambda match: match.expand(replacement), line)
     print(line.rstrip(), flush=True)
 code = child.wait()
+if stopped_signal and code in (-stopped_signal, 128 + stopped_signal):
+    code = 0
 sys.exit(code if code >= 0 else 128-code)
 `
 }

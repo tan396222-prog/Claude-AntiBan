@@ -1,7 +1,10 @@
 package workbench
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"time"
@@ -17,6 +20,28 @@ var audioFormat = struct {
 	Channels   int    `json:"channels"`
 }{"s16le", 48000, 2}
 
+type bufferedAudio struct {
+	io.Reader
+	io.Closer
+}
+
+func readAudioReady(reader *bufio.Reader) error {
+	line, err := reader.ReadSlice('\n')
+	if err != nil {
+		return err
+	}
+	var ready struct {
+		Ready      bool   `json:"ready"`
+		Format     string `json:"format"`
+		SampleRate int    `json:"sample_rate"`
+		Channels   int    `json:"channels"`
+	}
+	if json.Unmarshal(line, &ready) != nil || !ready.Ready || ready.Format != "s16le" || ready.SampleRate != 48000 || ready.Channels != 2 {
+		return errors.New("客机声音格式无效")
+	}
+	return nil
+}
+
 // Audio is a local output stream. It does not grant guest Internet access and
 // cannot select a microphone, arbitrary guest command, or host audio source.
 func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
@@ -28,6 +53,14 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !websocket.IsWebSocketUpgrade(r) {
+		if s.macosGuest != nil {
+			s.macOSAudioStatus(w, r)
+			return
+		}
+		if s.windowsGuest != nil {
+			s.windowsAudioStatus(w, r)
+			return
+		}
 		jsonReply(w, audioFormat)
 		return
 	}
@@ -42,6 +75,14 @@ func (s *Server) audio(w http.ResponseWriter, r *http.Request) {
 	defer func() { s.mu.Lock(); s.audioClients--; s.mu.Unlock() }()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	if s.macosGuest != nil {
+		s.macOSAudioCapture(w, r, ctx, cancel)
+		return
+	}
+	if s.windowsGuest != nil {
+		s.windowsAudioCapture(w, r, ctx, cancel)
+		return
+	}
 	cmd := s.sshCommand(ctx, "-T", s.sshTarget(), "--", audioCaptureCommand)
 	pipe, err := cmd.StdoutPipe()
 	if err != nil {

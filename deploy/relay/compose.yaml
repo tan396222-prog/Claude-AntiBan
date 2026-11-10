@@ -1,0 +1,66 @@
+name: cage-relay
+
+services:
+  relay:
+    image: cage-relay:local
+    build:
+      context: ../..
+      dockerfile: deploy/relay/Dockerfile
+    user: "${RELAY_UID:?Set RELAY_UID to the token file owner UID}:${RELAY_GID:?Set RELAY_GID to the token file owner GID}"
+    command:
+      - --listen=0.0.0.0:8787
+      - --token-file=/run/secrets/relay_admin_token
+      - --max-rooms=128
+      - --pair-timeout=2m
+      - --idle-timeout=5m
+    secrets:
+      - relay_admin_token
+    networks:
+      - backend
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 15s
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2.11.8-alpine
+    environment:
+      RELAY_DOMAIN: "${RELAY_DOMAIN:?Set RELAY_DOMAIN to the relay public DNS name}"
+    depends_on:
+      - relay
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - edge
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+secrets:
+  relay_admin_token:
+    file: "${RELAY_TOKEN_FILE:?Set RELAY_TOKEN_FILE to an absolute protected token file path}"
+
+networks:
+  edge: {}
+  backend:
+    internal: true
+
+volumes:
+  caddy_data: {}
+  caddy_config: {}

@@ -1,12 +1,13 @@
-// Guest applications render at 2x. Zoom changes their logical workspace size,
+// The guest reports its running pixel density. Zoom changes its logical workspace size,
 // while noVNC fits the resulting framebuffer into the available CSS area.
-export function displayGeometry({ width, height }, { desktop = false, zoom = 1 } = {}) {
+export function displayGeometry({ width, height }, { desktop = false, zoom = 1, density = 2 } = {}) {
   if (width < (desktop ? 320 : 160) || height < 240) return null;
-  const ratio = 2 / zoom;
+  const scale = density === 1.5 ? 1.5 : 2;
+  const ratio = scale / zoom;
   const limit = Math.min(1, 8192 / (width * ratio), 8192 / (height * ratio));
   return {
-    width: Math.max(320, Math.floor(width * ratio * limit)),
-    height: Math.max(desktop ? 240 : 480, Math.floor(height * ratio * limit)),
+    width: Math.max(desktop ? 320 : 160 * scale, Math.floor(width * ratio * limit)),
+    height: Math.max(desktop ? 240 : 240 * scale, Math.floor(height * ratio * limit)),
   };
 }
 
@@ -37,7 +38,7 @@ export function displaySizeSync(resize, { onError = () => {}, onSuccess = () => 
     } finally {
       busy = false;
       if (!disposed) {
-        if (key(desired) !== key(target)) schedule(0);
+        if (key(desired) !== key(target)) schedule(delay);
         else if (retryDelay !== undefined) schedule(retryDelay);
       }
     }
@@ -46,8 +47,9 @@ export function displaySizeSync(resize, { onError = () => {}, onSuccess = () => 
     update(size) {
       if (disposed || !size || key(size) === key(desired)) return;
       desired = size;
+      // Replace a retry timer, but let an ordinary resize tick fire during a drag.
+      if (!busy && (timer == null || retries > 0)) schedule(delay);
       retries = 0;
-      schedule(delay);
     },
     retry() { if (!disposed) { applied = ""; retries = 0; schedule(0); } },
     dispose() { disposed = true; clearTimeout(timer); },

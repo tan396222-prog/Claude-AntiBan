@@ -5,12 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"github.com/sylvinus/agent-vm/internal/diagnostics"
+	"github.com/sylvinus/agent-vm/internal/usererror"
 	"runtime/debug"
 	"strings"
 	"sync"
+	"time"
 )
 
 type Job struct {
+	Canceled      bool           `json:"canceled,omitempty"`
+	SettingsSaved bool           `json:"settings_saved,omitempty"`
 	SetupProgress *SetupProgress `json:"setup_progress,omitempty"`
 	ID            string         `json:"id"`
 	Kind          string         `json:"kind"`
@@ -56,7 +60,7 @@ func (m *jobManager) submit(operation sync.Locker, kind string, pauseVersion uin
 			return m.state, nil
 		}
 		if kind != "stop" {
-			return Job{}, errJobBusy
+			return Job{}, fmt.Errorf("%w：当前正在%s。请等待完成，或先停止当前操作。", errJobBusy, jobName(m.state.Kind))
 		}
 	}
 	if prepare != nil {
@@ -76,6 +80,15 @@ func (m *jobManager) submit(operation sync.Locker, kind string, pauseVersion uin
 		if m.state.ID == execution.id {
 			if m.state.SetupProgress != nil {
 				if p := parseSetupProgress(line); p != nil {
+					previous := m.state.SetupProgress
+					if p.System == "" {
+						p.System = previous.System
+					}
+					now := time.Now()
+					if p.Operation != "verify" && p.Label == previous.Label && p.Total == previous.Total && p.Received != nil && previous.Received != nil && *p.Received >= *previous.Received && !execution.progressUpdated.IsZero() {
+						p.BytesPerSecond = float64(*p.Received-*previous.Received) / now.Sub(execution.progressUpdated).Seconds()
+					}
+					execution.progressUpdated = now
 					m.state.SetupProgress = p
 					if strings.HasPrefix(line, "CAGE_") {
 						return
@@ -143,16 +156,39 @@ func (m *jobManager) finishLocked(execution *jobExecution, err error) {
 	m.state.Running = false
 	switch {
 	case errors.Is(err, context.Canceled):
+		m.state.Canceled = true
 		m.state.Message = "已取消"
+		if m.state.SettingsSaved {
+			m.state.Message = "设置已保存，后续操作已取消"
+		}
 		diagnostics.Log("info", "task", m.state.Kind+" canceled")
 	case err != nil:
-		m.state.Error = err.Error()
-		m.state.Message = "操作未完成"
-		diagnostics.Log("error", "task", m.state.Kind+": "+err.Error())
+		m.state.Error = usererror.Display(jobName(m.state.Kind), err, "打开“操作详情”查看失败记录；仍无法处理时，"+failureHelp).Error()
+		m.state.Message = jobName(m.state.Kind) + "失败"
+		var networkFailure networkCheckError
+		if m.state.Kind == "start" && errors.As(err, &networkFailure) {
+			m.state.Message = "环境已启动，联网检查未通过"
+		} else if m.state.SettingsSaved {
+			m.state.Message = "设置已保存，等待环境恢复"
+			if errors.As(err, &networkFailure) {
+				m.state.Message = "设置已保存，环境已启动，联网检查未通过"
+			}
+		}
+		diagnostics.Log("error", "task", fmt.Sprintf("%s: %v; cause=%v", m.state.Kind, err, errors.Unwrap(err)))
 	default:
 		m.state.Message = "已完成"
 		diagnostics.Log("info", "task", m.state.Kind+" completed")
 	}
+}
+
+func jobName(kind string) string {
+	names := map[string]string{
+		"start": "启动环境", "stop": "停止环境", "setup": "准备环境", "settings": "应用设置", "project": "连接项目目录", "storage": "迁移环境目录", "restore": "恢复配置", "resources": "应用资源配置", "safety": "检查联网条件", "network-recovery": "恢复联网", "proxy": "应用代理节点", "proxy-network": "恢复代理连接", "environment-update": "更新环境组件", "environment-tools": "更新环境工具", "claude-desktop-install": "安装 Claude Desktop", "claude-desktop-start": "打开 Claude Desktop", "claude-desktop-stop": "关闭 Claude Desktop",
+	}
+	if name := names[kind]; name != "" {
+		return name
+	}
+	return "本次操作"
 }
 
 func (m *jobManager) snapshot() Job {
@@ -197,18 +233,30 @@ func (m *jobManager) close() {
 }
 
 type jobExecution struct {
-	owner        *jobManager
-	id           string
-	ctx          context.Context
-	pauseVersion uint64
-	log          *diagnostics.Stream
+	owner           *jobManager
+	id              string
+	ctx             context.Context
+	pauseVersion    uint64
+	log             *diagnostics.Stream
+	progressUpdated time.Time
 }
 
 func (e *jobExecution) message(message string) {
 	e.owner.mu.Lock()
 	defer e.owner.mu.Unlock()
 	if e.id != "" && e.owner.state.ID == e.id && e.owner.state.Running {
+		if e.owner.state.SettingsSaved {
+			message = "设置已保存，" + message
+		}
 		e.owner.state.Message = message
+	}
+}
+
+func (e *jobExecution) settingsSaved() {
+	e.owner.mu.Lock()
+	defer e.owner.mu.Unlock()
+	if e.id != "" && e.owner.state.ID == e.id && e.owner.state.Running {
+		e.owner.state.SettingsSaved = true
 	}
 }
 

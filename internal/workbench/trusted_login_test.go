@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"testing"
 	"time"
@@ -89,6 +90,91 @@ func TestTrustedLocalLauncherBoundary(t *testing.T) {
 	}
 }
 
+func TestTrustedPasswordRememberMigrationAndRepair(t *testing.T) {
+	profile, devices := t.TempDir(), t.TempDir()
+	a, err := loadLocalAccount(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.create("Remember test", "first-password", ""); err != nil {
+		t.Fatal(err)
+	}
+	original := bytes.Clone(a.key)
+	automatic, err := a.enrollDevice("automatic")
+	if err != nil {
+		t.Fatal(err)
+	}
+	biometric, err := a.enrollDevice("biometric")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.trustedLogin("enable", "first-password", devices); err != nil {
+		t.Fatal(err)
+	}
+	if a.record.Devices["automatic"].ID != "" || a.record.Devices["biometric"].ID != biometric.ID {
+		t.Fatal("migration did not replace only the automatic grant")
+	}
+	firstID := a.record.TrustedUnlock.ID
+	// Copying a password account to a new OS profile must require the password.
+	a.lock()
+	a, err = loadLocalAccount(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherDevice := t.TempDir()
+	if err = a.trustedLogin("resume", "", otherDevice); err == nil {
+		t.Fatal("copied account unlocked on a different device")
+	}
+	if err = a.unlock("first-password"); err != nil {
+		t.Fatal(err)
+	}
+	// Remember me must replace a stale record even if TrustedUnlock is set.
+	if err = a.trustedLogin("enable", "first-password", otherDevice); err != nil {
+		t.Fatal(err)
+	}
+	if a.record.TrustedUnlock.ID == firstID {
+		t.Fatal("stale grant was not replaced")
+	}
+	previousID := a.record.TrustedUnlock.ID
+	if err = os.Remove(filepath.Join(otherDevice, previousID+".json")); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.trustedLogin("enable", "first-password", otherDevice); err != nil {
+		t.Fatal(err)
+	}
+	a.lock()
+	a, err = loadLocalAccount(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = a.trustedLogin("resume", "", otherDevice); err != nil || !bytes.Equal(original, a.key) {
+		t.Fatal("repaired grant did not survive restart with the original workspace key", err)
+	}
+	// Disabling remember must revoke a legacy automatic grant too, including
+	// when no shared trusted grant exists. Touch ID remains available.
+	for range 2 {
+		if _, err = a.enrollDevice("automatic"); err != nil {
+			t.Fatal(err)
+		}
+		if err = a.trustedLogin("disable", "", otherDevice); err != nil {
+			t.Fatal(err)
+		}
+		if a.view().TrustedLogin || a.record.Devices["automatic"].ID != "" {
+			t.Fatal("opt-out left an automatic login path enabled")
+		}
+	}
+	a.lock()
+	if err = a.trustedLogin("resume", "", otherDevice); err == nil {
+		t.Fatal("disabled trust reopened the account")
+	}
+	if err = a.unlockDevice("automatic", automatic); err == nil {
+		t.Fatal("revoked legacy grant reopened the account")
+	}
+	if err = a.unlockDevice("biometric", biometric); err != nil || !bytes.Equal(original, a.key) {
+		t.Fatal("remember opt-out broke biometric unlock or workspace data", err)
+	}
+}
+
 func TestTrustedLocalUnlockIsPrivateToDesktop(t *testing.T) {
 	s := testServer(t)
 	a, err := loadLocalAccount(s.profile)
@@ -140,10 +226,11 @@ func TestTrustedLocalDesktopEntryAndWorkload(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.close()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	life := t.Context()
+	bootstrap, cancel := context.WithTimeout(life, 5*time.Second)
 	defer cancel()
 	local := &desktopLocal{profile: workload.profile}
-	session, err := local.localSession(ctx, ctx, c, desktopLocalReply{Identity: workload.identity, InstanceID: workload.instanceID})
+	session, err := local.localSession(life, bootstrap, c, desktopLocalReply{Identity: workload.identity, InstanceID: workload.instanceID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,11 +238,22 @@ func TestTrustedLocalDesktopEntryAndWorkload(t *testing.T) {
 	gateway := testServer(t)
 	gateway.remote = newDesktopGateway(gateway.profile, local)
 	d := gateway.remote.desktop
-	d.active = &desktopTarget{id: d.generation, mode: "local", ctx: ctx, session: session}
+	d.active = &desktopTarget{id: d.generation, mode: "local", ctx: life, session: session}
 	body, _ := json.Marshal(trustedLoginRequest{Action: "create", ConnectionID: d.generation})
 	w := request(gateway, "POST", "/api/client/trusted-login", gateway.origin, string(body), true)
-	if w.Code != http.StatusOK {
-		t.Fatalf("trust creation through gateway: %d %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict || workload.account.view().Exists {
+		t.Fatalf("fresh profile bypassed registration: %d %s", w.Code, w.Body.String())
+	}
+	// An existing trusted workspace still resumes after upgrading.
+	base, err := os.UserConfigDir()
+	if runtime.GOOS == "windows" {
+		base = os.Getenv("LOCALAPPDATA")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = workload.account.trustedLogin("create", "", filepath.Join(base, "Cage", "trusted-local")); err != nil {
+		t.Fatal(err)
 	}
 	read := gatewayRequest(gateway, "/api/account", d.generation)
 	var view accountView
@@ -167,5 +265,23 @@ func TestTrustedLocalDesktopEntryAndWorkload(t *testing.T) {
 	w = request(gateway, "POST", "/api/client/trusted-login", gateway.origin, string(body), true)
 	if w.Code != http.StatusOK || !workload.account.view().Unlocked {
 		t.Fatalf("local resume failed: %d %s", w.Code, w.Body.String())
+	}
+	// Existing password accounts use the same launcher path on every platform.
+	for _, action := range []string{"protect", "enable"} {
+		body, _ = json.Marshal(trustedLoginRequest{Action: action, Password: "first-password", ConnectionID: d.generation})
+		w = request(gateway, "POST", "/api/client/trusted-login", gateway.origin, string(body), true)
+		if w.Code != http.StatusOK {
+			t.Fatalf("password account %s: %d %s", action, w.Code, w.Body.String())
+		}
+	}
+	workload.account.lock()
+	workload.account, err = loadLocalAccount(workload.profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ = json.Marshal(trustedLoginRequest{Action: "resume", ConnectionID: d.generation})
+	w = request(gateway, "POST", "/api/client/trusted-login", gateway.origin, string(body), true)
+	if w.Code != http.StatusOK || !workload.account.viewFor(true).Unlocked || workload.account.viewFor(false).Unlocked {
+		t.Fatalf("password account did not resume privately after reload: %d %s", w.Code, w.Body.String())
 	}
 }

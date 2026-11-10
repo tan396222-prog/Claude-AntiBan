@@ -74,7 +74,7 @@ func Validate(ctx context.Context, profile string, s Store) error {
 	defer output.Close()
 	cmd.Stdout, cmd.Stderr = output, output
 	if e := cmd.Run(); e != nil {
-		return errors.New("代理核心拒绝该配置，请检查节点协议和参数；原配置已保留")
+		return errors.New("随附的 Mihomo 核心未通过配置校验，请核对节点协议和参数；可在设置的“日志与诊断”中导出诊断包查看校验记录；原配置已保留")
 	}
 	return nil
 }

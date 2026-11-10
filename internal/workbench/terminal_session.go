@@ -21,8 +21,14 @@ type terminalPTY interface {
 type terminalSession struct {
 	mu                    sync.Mutex
 	id, title             string
+	sharedID              string
+	connectionID          string
+	conversationEnded     bool
 	workspace             string
 	kind, claudeAccountID string
+	loginGuestID          string
+	loginLinkMu           sync.Mutex
+	loginLinkCleanup      sync.Once
 	claudeAccountSource   string
 	cmd                   *exec.Cmd
 	file                  terminalPTY
@@ -33,6 +39,13 @@ type terminalSession struct {
 	inputs                chan string
 	stopping              chan struct{}
 	closeOnce             sync.Once
+	cliStartupDone        chan struct{}
+}
+
+func (t *terminalSession) ownsConversation() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return !t.closed && !t.conversationEnded
 }
 
 func newTerminalSession(file terminalPTY) *terminalSession {
@@ -52,7 +65,28 @@ func (t *terminalSession) summary() map[string]any {
 		}
 	}
 	return map[string]any{"id": t.id, "title": t.title, "closed": closed, "workspace": t.workspace, "kind": t.kind,
-		"claude_account_id": t.claudeAccountID, "claude_account_source": t.claudeAccountSource}
+		"claude_account_id": t.claudeAccountID, "claude_account_source": t.claudeAccountSource, "cli_session_id": t.sharedID,
+		"cli_starting": t.cliStartupPendingLocked()}
+}
+
+func (t *terminalSession) cliStartupPendingLocked() bool {
+	if t.cliStartupDone == nil || t.closed {
+		return false
+	}
+	select {
+	case <-t.cliStartupDone:
+		return false
+	default:
+		return true
+	}
+}
+
+func (t *terminalSession) finishCLIStartup() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cliStartupPendingLocked() {
+		close(t.cliStartupDone)
+	}
 }
 
 func (t *terminalSession) stopPTY() {
@@ -115,10 +149,12 @@ func (t *terminalSession) writeInput() {
 }
 
 type terminalSubscription struct {
-	History []byte
-	Output  <-chan []byte
-	session *terminalSession
-	channel chan []byte
+	History     []byte
+	Output      <-chan []byte
+	CLIStartup  <-chan struct{}
+	CLIStarting bool
+	session     *terminalSession
+	channel     chan []byte
 }
 
 // subscribe captures history and registers live output under the same lock.
@@ -136,7 +172,8 @@ func (t *terminalSession) subscribe() *terminalSubscription {
 	if t.kind == "claude-login" {
 		history = []byte("请在 Cage 浏览器的临时登录页完成授权。若页面提供验证码，可返回此终端输入。\r\n")
 	}
-	return &terminalSubscription{History: history, Output: channel, session: t, channel: channel}
+	return &terminalSubscription{History: history, Output: channel, CLIStartup: t.cliStartupDone,
+		CLIStarting: t.cliStartupPendingLocked(), session: t, channel: channel}
 }
 
 // Close detaches the viewer; the PTY and its process continue running.

@@ -52,18 +52,18 @@ try {
       "https://www.bing.com/",
   );
   assert.equal(state.tabs[0].url, "https://www.bing.com/");
-  await page.getByRole("button", { name: /^设置/ }).click();
-  await page.getByLabel("浏览器默认网站").fill("https://example.com/start");
+  await page.getByRole("button", { name: "浏览器菜单", exact: true }).click();
+  await page.getByRole("menuitem", { name: "设置", exact: true }).click();
+  await page.getByLabel("新标签页地址", { exact: true }).fill("https://example.com/start");
   assert.equal(
     await page.getByRole("button", { name: "保存并重启", exact: true }).count(),
     0,
   );
   const starts = state.requests.filter((r) => r.path === "/start").length;
   await shot("settings");
-  await page.getByRole("button", { name: "保存设置", exact: true }).click();
-  await page
-    .getByRole("heading", { name: "设置", exact: true })
-    .waitFor({ state: "hidden" });
+  await page.getByRole("button", { name: "保存地址", exact: true }).click();
+  await page.getByText("已保存", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "关闭 设置", exact: true }).click();
   assert.equal(state.settings.browser_home_url, "https://example.com/start");
   assert.equal(
     state.requests.filter((r) => r.path === "/start").length,

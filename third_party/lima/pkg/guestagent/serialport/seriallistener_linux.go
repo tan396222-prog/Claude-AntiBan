@@ -20,7 +20,7 @@ type SerialListener struct {
 func Listen(serialDevice string) (net.Listener, error) {
 	c, err := DialSerial(serialDevice)
 	if err != nil {
-		return nil, &net.OpError{Op: "dial", Net: "virtio", Source: c.LocalAddr(), Addr: nil, Err: err}
+		return nil, &net.OpError{Op: "dial", Net: "virtio", Source: nil, Addr: nil, Err: err}
 	}
 
 	return netutil.LimitListener(&SerialListener{conn: c}, 1), nil
@@ -45,19 +45,18 @@ func (ln *SerialListener) Close() error {
 	ln.mu.Lock()
 	defer ln.mu.Unlock()
 
-	if !ln.ok() {
-		return syscall.EINVAL
-	}
-
 	if ln.closed {
 		return nil
 	}
 	ln.closed = true
 
-	return nil
+	// Connections reuse this port, so the listener owns its final close.
+	return ln.conn.port.Close()
 }
 
 func (ln *SerialListener) Addr() net.Addr {
+	ln.mu.Lock()
+	defer ln.mu.Unlock()
 	if ln.ok() {
 		return ln.conn.LocalAddr()
 	}

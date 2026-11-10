@@ -3,8 +3,11 @@ import React, { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   FileCode2,
+  Archive,
+  LoaderCircle,
   ChevronDown,
   Globe2,
+  Settings,
   Pencil,
   Pin,
   PinOff,
@@ -12,11 +15,14 @@ import {
   X,
 } from "lucide-react";
 import { tabName } from "./workspace-state.mjs";
+import { AgentIcon } from "./agent-icon";
 
-export function TabIcon({ kind, favicon, size = 16 }) {
+export function TabIcon({ kind, favicon, agent, accountNumber, size = 16 }) {
   const [failed, setFailed] = useState("");
-  if (kind === "terminal") return <TerminalSquare size={size} />;
+  if (kind === "terminal" && agent) return <AgentIcon accountNumber={accountNumber} size={Math.max(20, size)} />;
+  if (kind === "terminal") return <TerminalSquare size={Math.max(20, size)} />;
   if (kind === "editor") return <FileCode2 size={size} />;
+  if (kind === "browser-settings") return <Settings size={size} />;
   if (typeof favicon === "string" && favicon.length <= 8192 &&
       /^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(favicon) && failed !== favicon)
     return <img src={favicon} className="tab-favicon" alt="" width={size} height={size}
@@ -26,12 +32,10 @@ export function TabIcon({ kind, favicon, size = 16 }) {
 
 function TerminalAction({ label, icon: Icon, disabled, onClick }) {
   return (
-    <>
-      <button className="icon-button" aria-label={label} disabled={disabled} onClick={onClick}>
-        <Icon size={14} />
-      </button>
+    <button className="icon-button" aria-label={label} disabled={disabled} onClick={onClick}>
       <span className="terminal-action-label" aria-hidden="true">{label}</span>
-    </>
+      <Icon size={14} />
+    </button>
   );
 }
 
@@ -43,6 +47,7 @@ export function WorkspaceTabs({
   active,
   label,
   horizontal = false,
+  vertical = false,
   busy,
   ready,
   onSelect,
@@ -51,6 +56,8 @@ export function WorkspaceTabs({
   onPin,
   onReorder,
   splitDrag,
+  openingSession,
+  sessionOpenError,
 }) {
   const [menu, setMenu] = useState(null);
   const [drag, setDrag] = useState(null);
@@ -87,6 +94,9 @@ export function WorkspaceTabs({
       .toLowerCase()
       .includes(query.toLowerCase()),
   );
+  const firstFocusable = tabs.findIndex(tab => tab.historySession
+    ? !busy && openingSession !== tab.cli_session_id && !tab.sessionRunningElsewhere
+    : ready || tab.kind === "terminal");
   const finishDrag = (commit, event) => {
     const current = pointer.current;
     pointer.current = null;
@@ -96,7 +106,7 @@ export function WorkspaceTabs({
     suppressClick.current = true;
     if (!commit) return;
     const { clientX, clientY } = event;
-    if (splitDrag.drop(current.id, clientX, clientY)) return;
+    if (!tabs.find(tab => tab.id === current.id)?.historySession && splitDrag.drop(current.id, clientX, clientY)) return;
     const over = document.elementFromPoint(clientX, clientY);
     if (!list.current?.contains(over)) return;
     if (horizontal) onReorder(current.id, null, current.order);
@@ -126,8 +136,8 @@ export function WorkspaceTabs({
       left: node.offsetLeft,
       width: node.getBoundingClientRect().width,
     }));
-    const group = items.filter(item =>
-      Boolean(saved[item.id]?.pinned) === Boolean(saved[tab.id]?.pinned));
+    const group = horizontal || vertical ? items.filter(item =>
+      Boolean(saved[item.id]?.pinned) === Boolean(saved[tab.id]?.pinned)) : items;
     pointer.current = {
       id: tab.id, startX: event.clientX, startY: event.clientY,
       items, group, order: items.map(item => item.id), moved: false,
@@ -141,7 +151,7 @@ export function WorkspaceTabs({
     let dx = event.clientX - current.startX;
     if (!current.moved && Math.hypot(dx, event.clientY - current.startY) < 5) return;
     current.moved = true;
-    const dropSide = splitDrag.hover(current.id, event.clientX, event.clientY);
+    const dropSide = tabs.find(tab => tab.id === current.id)?.historySession ? null : splitDrag.hover(current.id, event.clientX, event.clientY);
     if (!horizontal || dropSide) {
       setDrag({ id: current.id, offsets: {}, widths: {} });
       return;
@@ -186,7 +196,7 @@ export function WorkspaceTabs({
   };
   const showMenu = (tab, event) => {
     event.preventDefault();
-    if (!horizontal) {
+    if (!horizontal && !vertical) {
       event.currentTarget.focus();
       event.currentTarget.parentElement.querySelector(".terminal-row-actions button:not(:disabled)")?.focus();
       return;
@@ -204,7 +214,7 @@ export function WorkspaceTabs({
     list.current
       ?.querySelector('[aria-selected="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [active, horizontal]);
+  }, [active, horizontal, tabs.length]);
   useEffect(() => {
     if (!menu && !allOpen) return;
     const dismiss = (event) => {
@@ -269,8 +279,8 @@ export function WorkspaceTabs({
         aria-label={label}
         aria-orientation={horizontal ? "horizontal" : "vertical"}
         className={
-          horizontal
-            ? `browser-tabs ${drag ? "is-dragging" : ""}`
+          horizontal || vertical
+            ? `browser-tabs ${vertical ? "browser-tabs-vertical" : ""} ${drag ? "is-dragging" : ""}`
             : "sidebar-tabs"
         }
         style={
@@ -285,11 +295,17 @@ export function WorkspaceTabs({
       >
         {tabs.map((tab, index) => {
           const title = tabName(tab, saved);
+          const opening = Boolean(openingSession) && openingSession === tab.cli_session_id;
+          const runningElsewhere = tab.sessionRunningElsewhere;
+          const runningNotice = "其他窗口运行中，退出原会话后可在 Cage 接续";
+          const openError = tab.historySession && sessionOpenError?.id === tab.cli_session_id ? sessionOpenError.message : "";
+          const errorID = `session-open-error-${tab.cli_session_id}`;
           return (
+            <React.Fragment key={tab.id}>
             <div
-              key={tab.id}
               data-tab-id={tab.id}
-              className={`${horizontal ? "browser-tab" : "sidebar-tab"} ${tab.id === active ? "active" : ""} ${tab.closed ? "ended" : ""} ${drag?.id === tab.id ? "dragging" : ""} ${horizontal && tabWidth(tab.id) < 96 ? "compact" : ""} ${horizontal && tabWidth(tab.id) < 40 ? "tiny" : ""} ${horizontal && tabWidth(tab.id) < 24 ? "sliver" : ""}`}
+              title={runningElsewhere ? runningNotice : undefined}
+              className={`${horizontal || vertical ? "browser-tab" : "sidebar-tab"} ${tab.id === active ? "active" : ""} ${tab.closed ? "ended" : ""} ${drag?.id === tab.id ? "dragging" : ""} ${horizontal && tabWidth(tab.id) < 96 ? "compact" : ""} ${horizontal && tabWidth(tab.id) < 40 ? "tiny" : ""} ${horizontal && tabWidth(tab.id) < 24 ? "sliver" : ""}`}
               style={
                 horizontal
                   ? {
@@ -316,20 +332,30 @@ export function WorkspaceTabs({
               }}
             >
               <button
-                role="tab"
+                role={tab.historySession ? undefined : "tab"}
+                className={tab.historySession ? "sidebar-session" : undefined}
+                aria-busy={opening || undefined}
+                aria-describedby={openError ? errorID : undefined}
+                aria-description={runningElsewhere ? runningNotice : undefined}
                 aria-label={tab.claudeLabel ? `${title} · ${tab.claudeLabel}` : title}
-                aria-selected={tab.id === active}
+                aria-selected={tab.historySession ? undefined : tab.id === active}
                 tabIndex={
                   tab.id === active ||
-                  (!tabs.some((t) => t.id === active) && index === 0)
+                  (!tabs.some((t) => t.id === active) && index === firstFocusable)
                     ? 0
                     : -1
                 }
-                disabled={!ready && tab.kind !== "terminal"}
-                title={tab.url ? `${title}\n${tab.url}` : tab.claudeLabel ? `${title} · ${tab.claudeLabel}` : title}
+                disabled={tab.historySession ? busy || opening || runningElsewhere : !ready && tab.kind !== "terminal"}
+                title={runningElsewhere ? `${title}\n${runningNotice}` : tab.url ? `${title}\n${tab.url}` : [title, tab.claudeAccountNumber && `账号 ${tab.claudeAccountNumber}`, tab.claudeLabel].filter(Boolean).join(" · ")}
                 onClick={() => onSelect(tab.id)}
                 onContextMenu={(event) => showMenu(tab, event)}
                 onKeyDown={(event) => {
+                  if (!horizontal && !vertical && event.altKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+                    event.preventDefault();
+                    const target = tabs[index + (event.key === "ArrowUp" ? -1 : 1)];
+                    if (target) onReorder(tab.id, target.id);
+                    return;
+                  }
                   if (event.key === "F10" && event.shiftKey) {
                     showMenu(tab, event);
                     return;
@@ -338,25 +364,32 @@ export function WorkspaceTabs({
                   const next = horizontal ? "ArrowRight" : "ArrowDown";
                   if (![prev, next, "Home", "End"].includes(event.key)) return;
                   event.preventDefault();
-                  const at =
+                  const buttons = [...list.current.querySelectorAll('[role="tab"], .sidebar-session')];
+                  const enabled = buttons.map((button, at) => ({button, at})).filter(item => !item.button.disabled);
+                  const from = enabled.findIndex(item => item.at === index);
+                  const target = enabled[
                     event.key === "Home"
                       ? 0
                       : event.key === "End"
-                        ? tabs.length - 1
-                        : (index +
+                        ? enabled.length - 1
+                        : (from +
                             (event.key === prev ? -1 : 1) +
-                            tabs.length) %
-                          tabs.length;
-                  list.current.querySelectorAll('[role="tab"]')[at]?.focus();
-                  onSelect(tabs[at].id);
+                            enabled.length) %
+                          enabled.length];
+                  target?.button.focus();
+                  if (target && !tabs[target.at].historySession) onSelect(tabs[target.at].id, false);
                 }}
               >
-                <TabIcon kind={tab.kind} favicon={tab.favicon} size={15} />
+                <TabIcon kind={tab.kind} favicon={tab.favicon} size={15}
+                  agent={tab.terminalKind === "claude" || tab.terminalKind === "claude-login" || Boolean(tab.cli_session_id) || Boolean(tab.claude_account_id)}
+                  accountNumber={tab.claudeAccountNumber} />
                 <span>{title}</span>
                 {tab.claudeLabel && <small className="claude-tab-profile">{tab.claudeLabel}</small>}
                 {saved[tab.id]?.pinned && <Pin size={11} className="tab-pin" />}
+                {!horizontal && !vertical && (runningElsewhere || tab.sessionActive || opening) &&
+                  <LoaderCircle size={13} className="spin session-activity" role="img" aria-label={runningElsewhere ? "其他窗口运行中" : opening ? "正在打开会话" : "会话正在运行"} />}
               </button>
-              {horizontal ? (
+              {horizontal || vertical ? (
                 <button
                   className="tab-close icon-button"
                   aria-label={`关闭 ${title}`}
@@ -370,10 +403,12 @@ export function WorkspaceTabs({
                   <TerminalAction label={saved[tab.id]?.pinned ? "取消置顶" : "置顶"}
                     icon={saved[tab.id]?.pinned ? PinOff : Pin} disabled={busy} onClick={() => onPin(tab.id)} />
                   <TerminalAction label="重命名" icon={Pencil} disabled={busy} onClick={() => onRename(tab)} />
-                  <TerminalAction label="删除" icon={X} disabled={busy} onClick={() => onClose(tab)} />
+                  <TerminalAction label={tab.cli_session_id ? "归档" : "关闭终端"} icon={tab.cli_session_id ? Archive : X} disabled={busy} onClick={event => onClose(tab, event.currentTarget)} />
                 </div>
               )}
             </div>
+            {openError && <p id={errorID} className="sidebar-session-open-error" role="alert">{openError}</p>}
+            </React.Fragment>
           );
         })}
       </div>
@@ -420,7 +455,9 @@ export function WorkspaceTabs({
                         onSelect(tab.id);
                       }}
                     >
-                      <TabIcon kind={tab.kind} favicon={tab.favicon} />
+                      <TabIcon kind={tab.kind} favicon={tab.favicon}
+                        agent={tab.terminalKind === "claude" || tab.terminalKind === "claude-login" || Boolean(tab.cli_session_id) || Boolean(tab.claude_account_id)}
+                        accountNumber={tab.claudeAccountNumber} />
                       <span>{tabName(tab, saved)}</span>
                       {tab.id === active && (
                         <span className="current-tab-marker">当前</span>

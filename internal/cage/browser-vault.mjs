@@ -91,7 +91,7 @@ export class BrowserVault {
     for (const [id, item] of this.pending) if (this.now() >= item.expires) this.pending.delete(id);
   }
   async attach(tab, sid) {
-    if (this.tab(tab)?.login) return;
+    if (this.tab(tab)?.login || this.tab(tab)?.incognito) return;
     const entry = { tab, sid, top: "", contexts: new Map() };
     this.sessions.set(sid, entry);
     await this.cdp("Runtime.enable", {}, sid);
@@ -120,7 +120,7 @@ export class BrowserVault {
     if (event.method !== "Runtime.bindingCalled" || p.name !== binding ||
         entry.contexts.get(p.executionContextId) !== entry.top) return;
     this.prune();
-    if (!this.lease || entry.tab !== this.active() || this.tab(entry.tab)?.login || p.payload.length > 16000) return;
+    if (!this.lease || entry.tab !== this.active() || (this.tab(entry.tab)?.login || this.tab(entry.tab)?.incognito) || p.payload.length > 16000) return;
     try {
       const value = JSON.parse(p.payload);
       const origin = new URL(value.origin).origin;
@@ -173,7 +173,7 @@ export class BrowserVault {
             v.lease = ${JSON.stringify(this.lease)}; v.deadline = Date.now() + 6500;
             return {origin: location.origin, document: v.document};
           })()`);
-          if (value && entry.tab === input.tab && entry.tab === this.active() && !this.tab(entry.tab)?.login)
+          if (value && entry.tab === input.tab && entry.tab === this.active() && !(this.tab(entry.tab)?.login || this.tab(entry.tab)?.incognito))
             Object.assign(result, value);
         } catch {}
       }));
@@ -189,7 +189,7 @@ export class BrowserVault {
     if (input.action === "dismiss") { this.pending.delete(input.candidate); return { ok: true }; }
     if (input.action === "fill") {
       const entry = [...this.sessions.values()].find(value => value.tab === input.tab);
-      if (!entry || input.tab !== this.active() || this.tab(input.tab)?.login) throw new Error("当前网页已切换");
+      if (!entry || input.tab !== this.active() || (this.tab(input.tab)?.login || this.tab(input.tab)?.incognito)) throw new Error("当前网页已切换");
       const filled = await this.evaluate(entry, `globalThis.cageVault?.fill(${JSON.stringify(input)}) === true`);
       if (filled) this.usernames.set(entry.tab, { origin: input.origin, username: input.username, expires: this.now() + 120000 });
       if (!filled) throw new Error("未找到可填写的登录框，或页面已变化");

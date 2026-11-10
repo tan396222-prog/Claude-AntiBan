@@ -30,6 +30,7 @@ type claudeAccount struct {
 	Email          string       `json:"email,omitempty"`
 	Organization   string       `json:"organization,omitempty"`
 	Plan           string       `json:"plan,omitempty"`
+	HandoffGroup   string       `json:"handoff_group,omitempty"`
 	Quota          *claudeQuota `json:"quota,omitempty"`
 	CheckedAt      int64        `json:"checked_at,omitempty"`
 	UsageStatus    string       `json:"usage_status,omitempty"`
@@ -60,8 +61,28 @@ type claudeGuestSnapshot struct {
 }
 
 type claudeAccountList struct {
-	Accounts     []claudeAccount `json:"accounts"`
-	PendingLogin string          `json:"pending_login,omitempty"`
+	Accounts     []claudeAccount  `json:"accounts"`
+	PendingLogin string           `json:"pending_login,omitempty"`
+	Scheduling   claudeScheduling `json:"scheduling"`
+}
+
+type claudeScheduling struct {
+	Mode         string `json:"mode"`
+	SwitchPolicy string `json:"switch_policy"`
+}
+
+func (p claudeScheduling) defaults() claudeScheduling {
+	if p.Mode == "" {
+		p.Mode = "balanced"
+	}
+	if p.SwitchPolicy == "" {
+		p.SwitchPolicy = "ask"
+	}
+	return p
+}
+
+func (p claudeScheduling) valid() bool {
+	return (p.Mode == "balanced" || p.Mode == "sequential") && (p.SwitchPolicy == "ask" || p.SwitchPolicy == "allow" || p.SwitchPolicy == "wait")
 }
 
 type claudeAccountManager struct {
@@ -96,13 +117,17 @@ func validClaudeID(id string) bool {
 }
 
 func (s *Server) loadClaudeAccounts() (claudeAccountList, error) {
-	list := claudeAccountList{Accounts: []claudeAccount{}}
+	list := claudeAccountList{Accounts: []claudeAccount{}, Scheduling: (claudeScheduling{}).defaults()}
 	data, err := os.ReadFile(filepath.Join(s.profile, "claude-accounts.json"))
 	if os.IsNotExist(err) {
 		return list, nil
 	}
 	if err != nil || json.Unmarshal(data, &list) != nil || list.Accounts == nil {
 		return list, errors.New("Claude 账号文件无法读取，请检查配置目录或恢复备份")
+	}
+	list.Scheduling = list.Scheduling.defaults()
+	if !list.Scheduling.valid() {
+		return list, errors.New("Claude 调度设置无效，请检查配置文件")
 	}
 	ids := make(map[string]bool)
 	profiles := make(map[string]bool)
@@ -111,7 +136,7 @@ func (s *Server) loadClaudeAccounts() (claudeAccountList, error) {
 		if a.Source == "" {
 			a.Source = "managed"
 		}
-		if !validClaudeID(a.ID) || ids[a.ID] || a.Source != "managed" && a.Source != "default" || a.Source == "default" && (a.Email == "" || a.ProfileID != "") || a.ProfileID != "" && !validClaudeID(a.ProfileID) {
+		if !validClaudeID(a.ID) || ids[a.ID] || a.Source != "managed" && a.Source != "default" || a.Source == "default" && (a.Email == "" || a.ProfileID != "") || a.ProfileID != "" && !validClaudeID(a.ProfileID) || len(a.HandoffGroup) > 64 {
 			return list, errors.New("Claude 账号文件含无效或重复的记录，请从备份恢复")
 		}
 		ids[a.ID] = true
@@ -175,6 +200,13 @@ func (list *claudeAccountList) change(input claudeAccountInput) error {
 	}
 	if input.Enabled != nil {
 		a.Enabled = *input.Enabled
+	}
+	if input.HandoffGroup != nil {
+		group := strings.TrimSpace(*input.HandoffGroup)
+		if len(group) > 64 || strings.IndexFunc(group, unicode.IsControl) >= 0 {
+			return errors.New("接续分组最多 64 字节，不能含控制字符")
+		}
+		a.HandoffGroup = group
 	}
 	return nil
 }
@@ -360,6 +392,12 @@ func (s *Server) readClaudeGuestQuotas(ctx context.Context, ids []string) (map[s
 	// server-controlled deadline; keep completed chunks when a later one fails.
 	readings := make(map[string]claudeGuestQuota)
 	for chunk := range slices.Chunk(ids, 96) {
+		if s.windowsGuest != nil {
+			if err := s.windowsCLIRequest(ctx, map[string]any{"action": "account", "mode": "quotas", "ids": chunk}, &readings); err != nil {
+				return readings, err
+			}
+			continue
+		}
 		data, err := s.guest(ctx, "exec /usr/local/bin/cage-claude-account quotas "+strings.Join(chunk, " "))
 		if err != nil {
 			return readings, err
@@ -427,7 +465,7 @@ func (s *Server) allocateClaudeAccount(previous claudeAccountList, workspace str
 			return empty, err
 		}
 	}
-	active := make(map[string]int)
+	active := s.mobileCLI.activeAccounts()
 	logins := make(map[string]bool)
 	for _, session := range s.terminals.snapshot() {
 		if session["closed"] == true {
@@ -463,6 +501,14 @@ func (s *Server) allocateClaudeAccount(previous claudeAccountList, workspace str
 // Start at the account following the last allocation. Among eligible accounts,
 // prefer fewer live sessions, then the largest known remaining minimum window.
 func pickClaudeAccount(list claudeAccountList, active map[string]int, logins map[string]bool, last, preferred string, now time.Time) string {
+	if list.Scheduling.Mode == "sequential" {
+		for _, a := range list.Accounts {
+			if _, eligible := a.headroom(now); a.Enabled && a.Status == "ready" && !logins[a.ID] && eligible {
+				return a.ID
+			}
+		}
+		return ""
+	}
 	start := slices.IndexFunc(list.Accounts, func(a claudeAccount) bool { return a.ID == last }) + 1
 	best := ""
 	var bestActive int

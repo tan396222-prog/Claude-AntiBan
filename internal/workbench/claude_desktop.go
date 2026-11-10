@@ -11,15 +11,19 @@ import (
 	"time"
 
 	"github.com/sylvinus/agent-vm/internal/cage"
+	"github.com/sylvinus/agent-vm/internal/diagnostics"
+	"github.com/sylvinus/agent-vm/internal/usererror"
 )
 
 type claudeDesktopState struct {
-	Installed     bool   `json:"installed"`
-	Version       string `json:"version"`
-	Running       bool   `json:"running"`
-	Failed        bool   `json:"failed"`
-	Managed       bool   `json:"managed"`
-	FailureReason string `json:"failure_reason,omitempty"`
+	Installed         bool    `json:"installed"`
+	Version           string  `json:"version"`
+	Running           bool    `json:"running"`
+	Failed            bool    `json:"failed"`
+	Managed           bool    `json:"managed"`
+	NativeUserSession bool    `json:"native_user_session,omitempty"`
+	DisplayScale      float64 `json:"display_scale,omitempty"`
+	FailureReason     string  `json:"failure_reason,omitempty"`
 }
 
 const claudeDesktopSnapshot = `python3 - <<'CAGE_DESKTOP_STATE'
@@ -41,10 +45,26 @@ func (s *Server) claudeDesktopStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	b, err := s.guest(ctx, claudeDesktopSnapshot)
+	b, err := s.desktopStatus.read(ctx, s.lifetimeContext(), func(ctx context.Context) ([]byte, error) {
+		ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		defer cancel()
+		if s.windowsGuest != nil {
+			var result claudeDesktopState
+			if err := s.windowsDesktopRequest(ctx, "status", nil, &result); err != nil {
+				return nil, err
+			}
+			return json.Marshal(result)
+		}
+		return s.guest(ctx, claudeDesktopSnapshot)
+	})
 	var state claudeDesktopState
-	if err != nil || json.Unmarshal(b, &state) != nil {
-		http.Error(w, "无法读取 Claude Desktop 状态，请重试", 502)
+	if err != nil {
+		_ = diagnostics.New(s.profile).Record("warn", "claude-desktop", fmt.Sprintf("read state: %v", err))
+		http.Error(w, usererror.Wrap("读取 Claude Desktop 状态", err, "请确认环境仍在运行；重新连接后再打开应用。持续失败时导出诊断包。").Error(), 502)
+		return
+	}
+	if json.Unmarshal(b, &state) != nil {
+		http.Error(w, "读取 Claude Desktop 状态失败：环境返回的应用状态格式无效。请更新环境组件；仍失败时导出诊断包。", 502)
 		return
 	}
 	jsonReply(w, state)
@@ -65,6 +85,14 @@ func (s *Server) claudeDesktopAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.launch(w, "claude-desktop-"+action, func() error {
+		s.desktopStatus.invalidate()
+		defer s.desktopStatus.invalidate()
+		if s.windowsGuest != nil {
+			if action == "install" {
+				return errors.New("Windows 客机的自动安装尚未接通，请保留已有官方应用")
+			}
+			return s.windowsDesktopRequest(s.operationContext(), action, nil, nil)
+		}
 		switch action {
 		case "install":
 			s.mu.Lock()
@@ -100,31 +128,38 @@ func (s *Server) claudeDesktopAction(w http.ResponseWriter, r *http.Request) {
 			s.setMessage("正在下载并安装 Claude Desktop，可在操作详情查看进度…")
 			return RunMaintenanceScript(s.operationContext(), s.configPath, cage.ClaudeDesktopInstallScript(), s.jobs.execution(), s.jobs.execution())
 		case "start":
-			s.setMessage("正在打开 Claude Desktop…")
-			key, err := s.account.desktopKey()
-			if err != nil {
-				return err
-			}
-			defer clear(key)
-			script := `test "$(dpkg-query -W -f='${Status}' claude-desktop 2>/dev/null)" = 'install ok installed' || { echo '请先安装 Claude Desktop。'; exit 1; }
-` + cage.ClaudeDesktopProvisionScript()
-			if err = s.runDesktopScript(script, 20*time.Second); err != nil {
-				return err
-			}
-			ctx, cancel := context.WithTimeout(s.operationContext(), 55*time.Second)
-			defer cancel()
-			cmd := s.sshCommand(ctx, "-T", s.sshTarget(), "--", "/usr/local/bin/cage-claude-start")
-			cmd.Stdin = bytes.NewReader(key)
-			cmd.Stdout, cmd.Stderr = s.jobs.execution(), s.jobs.execution()
-			if err = cmd.Run(); err != nil {
-				return errors.New("Claude Desktop 未能启动，请查看操作详情；已有登录数据保持不变")
-			}
-			return nil
+			return s.startClaudeDesktop()
 		default:
 			s.setMessage("正在关闭 Claude Desktop…")
 			return s.runDesktopScript("sudo systemctl stop cage-claude-desktop.service", 30*time.Second)
 		}
 	})
+}
+
+func (s *Server) startClaudeDesktop() error {
+	defer func() { s.desktopViews.reset(); s.desktopViews.background(s.changeDesktopVisibility) }()
+	s.desktopStatus.invalidate()
+	defer s.desktopStatus.invalidate()
+	s.setMessage("正在打开 Claude Desktop…")
+	key, err := s.account.desktopKey()
+	if err != nil {
+		return err
+	}
+	defer clear(key)
+	script := `test "$(dpkg-query -W -f='${Status}' claude-desktop 2>/dev/null)" = 'install ok installed' || { echo '请先安装 Claude Desktop。'; exit 1; }
+` + cage.ClaudeDesktopProvisionScript()
+	if err = s.runDesktopScript(script, 20*time.Second); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(s.operationContext(), 55*time.Second)
+	defer cancel()
+	cmd := s.sshCommand(ctx, "-T", s.sshTarget(), "--", "/usr/local/bin/cage-claude-start")
+	cmd.Stdin = bytes.NewReader(key)
+	cmd.Stdout, cmd.Stderr = s.jobs.execution(), s.jobs.execution()
+	if err = cmd.Run(); err != nil {
+		return executionFailure("打开 Claude Desktop", errors.Join(ctx.Err(), err), s.jobs.snapshot().Log)
+	}
+	return nil
 }
 
 func (s *Server) runDesktopScript(script string, timeout time.Duration) error {
@@ -143,21 +178,34 @@ func (s *Server) runDesktopScript(script string, timeout time.Duration) error {
 			_, _ = s.guest(cleanup, "sudo systemctl stop cage-desktop-operation.service")
 			return ctx.Err()
 		}
-		return errors.New("Claude Desktop 操作未完成，请查看操作详情；安装失败可重试，已有浏览器和终端不受影响")
+		return executionFailure("准备或关闭 Claude Desktop", err, s.jobs.snapshot().Log)
 	}
 	return nil
 }
 
 func (s *Server) claudeDesktopCredentials(w http.ResponseWriter, r *http.Request) {
+	if s.windowsGuest != nil {
+		s.windowsDesktopCredentials(w, r)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	b, err := s.guest(ctx, "systemctl is-active --quiet cage-claude-desktop.service && cat /home/cage/.config/claude-cage/desktop-password")
-	password := strings.TrimSpace(string(b))
+	b, err := s.guest(ctx, `set -eu
+systemctl is-active --quiet cage-claude-desktop.service
+password=$(cat /home/cage/.config/claude-cage/desktop-password)
+printf '%s\n' "$password"
+if test -f /run/cage-desktop/base-display-scale; then cat /run/cage-desktop/base-display-scale
+elif test -f /run/cage-desktop/display-scale; then cat /run/cage-desktop/display-scale; fi`)
+	password, scale, _ := strings.Cut(strings.TrimSpace(string(b)), "\n")
 	if err != nil || len(password) != 8 {
 		http.Error(w, "Claude Desktop 尚未启动", 409)
 		return
 	}
-	jsonReply(w, map[string]string{"password": password})
+	density := 2.0
+	if scale == "1.5" {
+		density = 1.5
+	}
+	jsonReply(w, map[string]any{"password": password, "display_scale": density})
 }
 
 func (s *Server) claudeDesktopResize(w http.ResponseWriter, r *http.Request) {
@@ -172,12 +220,24 @@ func (s *Server) claudeDesktopResize(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "画面尺寸无效", 400)
 		return
 	}
+	if s.windowsGuest != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+		defer cancel()
+		if err := s.windowsDesktopRequest(ctx, "resize", map[string]any{"width": input.Width, "height": input.Height}, nil); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		jsonReply(w, map[string]bool{"ok": true})
+		return
+	}
 	// Fixed commands and validated integers only; no host shell executes input.
 	wid, hei := input.Width, input.Height
 	script := fmt.Sprintf(`set -eu
 export DISPLAY=:78 XAUTHORITY=/run/cage-desktop/Xauthority
 exec 9>/run/cage-desktop/resize.lock
 flock 9
+printf '%%s %%s\n' %d %d > /run/cage-desktop/desktop-size
+if test -f /run/cage-phone-desktop/layout.json; then exit 0; fi
 name=cage-%dx%d
 if ! xrandr --query | grep -q " $name "; then
   xrandr --newmode "$name" %.3f %d %d %d %d %d %d %d %d +HSync -VSync
@@ -186,7 +246,7 @@ fi
 xrandr --output VNC-0 --mode "$name"
 for old in $(xrandr --query | awk '/^ +cage-/ {print $1}'); do
   if [ "$old" != "$name" ]; then xrandr --delmode VNC-0 "$old"; xrandr --rmmode "$old"; fi
-done`, wid, hei, float64((wid+32)*(hei+8)*60)/1000000, wid, wid+8, wid+16, wid+32, hei, hei+1, hei+2, hei+8)
+done`, wid, hei, wid, hei, float64((wid+32)*(hei+8)*60)/1000000, wid, wid+8, wid+16, wid+32, hei, hei+1, hei+2, hei+8)
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 	if _, err := s.guest(ctx, script); err != nil {
@@ -197,10 +257,20 @@ done`, wid, hei, float64((wid+32)*(hei+8)*60)/1000000, wid, wid+8, wid+16, wid+3
 }
 
 func (s *Server) claudeDesktopVNC(w http.ResponseWriter, r *http.Request) {
+	if s.windowsGuest != nil {
+		s.windowsDesktopVNC(w, r)
+		return
+	}
 	if !s.vmRunning() {
 		http.Error(w, "环境尚未启动", 409)
 		return
 	}
+	release, err := s.acquireDesktopView()
+	if err != nil {
+		http.Error(w, "无法恢复 Claude Desktop 画面，请重新连接", http.StatusBadGateway)
+		return
+	}
+	defer release()
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	// No extra localhost port or public VNC listener on the host. SSH is bound

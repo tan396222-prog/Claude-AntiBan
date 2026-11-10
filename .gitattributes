@@ -27,3 +27,5 @@
 /third_party/** -text -whitespace
 /patches/** -text -whitespace
 /ui/vendor/** -text -whitespace
+# Build patches retain the upstream context whitespace required by patch(1).
+/scripts/guest-os/sshfs-openwith.patch -text -whitespace

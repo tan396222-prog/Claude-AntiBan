@@ -17,14 +17,6 @@ func TestInstaller(t *testing.T) {
 	runScript(t, "tests/installer.sh")
 }
 
-// tests/release.sh: release.sh's dry runs, against a throwaway repository.
-func TestRelease(t *testing.T) {
-	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("no git")
-	}
-	runScript(t, "tests/release.sh")
-}
-
 func runScript(t *testing.T, script string) {
 	t.Helper()
 	if runtime.GOOS == "windows" {

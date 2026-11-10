@@ -1,0 +1,109 @@
+--- a/sshfs.c
++++ b/sshfs.c
+@@ -324,6 +324,9 @@
+ };
+ 
+ struct sshfs {
++#ifdef __APPLE__
++	char *cage_openwith;
++#endif
+ 	char *directport;
+ 	char *ssh_command;
+ 	char *sftp_server;
+@@ -497,6 +500,9 @@
+ #define SSHFS_OPT(t, p, v) { t, offsetof(struct sshfs, p), v }
+ 
+ static struct fuse_opt sshfs_opts[] = {
++#ifdef __APPLE__
++	SSHFS_OPT("cage_openwith=%s",  cage_openwith, 0),
++#endif
+ 	SSHFS_OPT("directport=%s",     directport, 0),
+ 	SSHFS_OPT("ssh_command=%s",    ssh_command, 0),
+ 	SSHFS_OPT("sftp_server=%s",    sftp_server, 0),
+@@ -3829,7 +3835,76 @@
+ 	return 0;
+ }
+ 
++#ifdef __APPLE__
++/* Present guest-local LaunchServices metadata without creating host xattrs
++ * or AppleDouble files in a shared project. The GUI helper publishes this
++ * opaque value with the supported NSWorkspace per-file association API. */
++static int cage_getxattr(const char *path, const char *name, char *value,
++                        size_t size)
++{
++    if (!sshfs.cage_openwith || strcmp(name, "com.apple.LaunchServices.OpenWith"))
++        return -ENOTSUP;
++
++    struct stat target;
++    int status = sshfs_getattr(path, &target, NULL);
++    if (status != 0)
++        return status;
++    if (!S_ISREG(target.st_mode))
++        return -ENOATTR;
++
++    int fd = open(sshfs.cage_openwith, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
++    if (fd < 0)
++        return errno == ENOENT ? -ENOATTR : -errno;
++    struct stat st;
++    int result;
++    if (fstat(fd, &st) != 0) {
++        result = -errno;
++    } else if (!S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 65536) {
++        result = -EIO;
++    } else if (!size) {
++        result = (int)st.st_size;
++    } else if (size < (size_t)st.st_size) {
++        result = -ERANGE;
++    } else {
++        size_t copied = 0;
++        result = (int)st.st_size;
++        while (copied < (size_t)st.st_size) {
++            ssize_t count = read(fd, value + copied, (size_t)st.st_size - copied);
++            if (count < 0 && errno == EINTR)
++                continue;
++            if (count <= 0) {
++                result = count < 0 ? -errno : -EIO;
++                break;
++            }
++            copied += (size_t)count;
++        }
++    }
++    close(fd);
++    return result;
++}
++
++static int cage_listxattr(const char *path, char *list, size_t size)
++{
++    const char name[] = "com.apple.LaunchServices.OpenWith";
++    int available = cage_getxattr(path, name, NULL, 0);
++    if (available == -ENOATTR)
++        return 0;
++    if (available < 0)
++        return available;
++    if (!size)
++        return sizeof(name);
++    if (size < sizeof(name))
++        return -ERANGE;
++    memcpy(list, name, sizeof(name));
++    return sizeof(name);
++}
++#endif
++
+ static struct fuse_operations sshfs_oper = {
++#ifdef __APPLE__
++		.getxattr   = cage_getxattr,
++		.listxattr  = cage_listxattr,
++#endif
+ 		.init       = sshfs_init,
+ 		.getattr    = sshfs_getattr,
+ 		.access     = sshfs_access,
+@@ -3862,6 +3937,9 @@
+ {
+ 	printf(
+ "usage: %s [user@]host:[dir] mountpoint [options]\n"
++#ifdef __APPLE__
++"    -o cage_openwith=FILE  read guest-local file-opening metadata\n"
++#endif
+ "\n"
+ "    -h   --help            print help\n"
+ "    -V   --version         print version\n"

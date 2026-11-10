@@ -24,6 +24,8 @@ destination="$output_root/build-$(date +%Y%m%d-%H%M%S)-$suffix"
 if [[ "$skip_ui" == false ]]; then
   [[ -d ui/node_modules ]] || npm --prefix ui ci --no-audit --no-fund
   npm --prefix ui run build
+else
+  node ui/scripts/verify-build.mjs
 fi
 [[ -f internal/workbench/web/index.html ]] || { echo 'Build the UI before using --skip-ui.' >&2; exit 1; }
 go list -deps ./cmd/cage-client > "$stage/dependencies.txt"
@@ -31,6 +33,7 @@ if grep -Eq 'internal/limaembed|github.com/lima-vm/lima/v2|github.com/Code-Hex/v
   echo 'The client unexpectedly depends on a virtual machine runtime; build stopped.' >&2; exit 1
 fi
 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X github.com/sylvinus/agent-vm/internal/version.Version=$version" -o "$stage/cage" ./cmd/cage-client
+"$stage/cage" verify-web-assets
 mkdir -p "$stage/result"
 
 if [[ "$platform" == macos ]]; then
@@ -38,7 +41,7 @@ if [[ "$platform" == macos ]]; then
   mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
   swiftc -O -target "$(uname -m)-apple-macosx14.0" -parse-as-library \
     -framework Cocoa -framework WebKit -framework Security -framework LocalAuthentication \
-    desktop/Cage.swift desktop/NativeInput.swift desktop/Updates.swift desktop/AccountDevice.swift \
+    desktop/Cage.swift desktop/MacKeyboard.swift desktop/NativeInput.swift desktop/Updates.swift desktop/AccountDevice.swift desktop/MacGuestLogin.swift \
     -o "$bundle/Contents/MacOS/Cage"
   node scripts/bundle-cloud-kit.mjs "$bundle/Contents/Resources"
   cp "$stage/cage" "$bundle/Contents/Resources/cage"

@@ -3,8 +3,11 @@ package workbench
 import (
 	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/sylvinus/agent-vm/internal/cage"
+	"github.com/sylvinus/agent-vm/internal/guestos"
+	"github.com/sylvinus/agent-vm/internal/mounts"
 	"github.com/sylvinus/agent-vm/internal/paths"
 )
 
@@ -38,6 +41,7 @@ func privateProjectDirectories(profile string) ([]string, error) {
 		return nil, err
 	}
 	directories = append(directories, profile)
+	directories = append(directories, guestos.WindowsPrivateStoragePaths()...)
 	for _, directory := range directories {
 		physical, err := cage.StoragePhysicalPath(directory)
 		if os.IsNotExist(err) {
@@ -52,4 +56,29 @@ func privateProjectDirectories(profile string) ([]string, error) {
 		}
 	}
 	return directories, nil
+}
+
+func validateHostProjectData(root, profile string) error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	defaultProfile := filepath.Join(home, ".claude-cage")
+	// Independent profiles also protect disks and backups of the default workload.
+	if !paths.Equal(profile, defaultProfile) {
+		private, err := privateProjectDirectories(defaultProfile)
+		if err != nil {
+			return err
+		}
+		for _, dir := range private {
+			if cage.StoragePathsOverlap(root, dir) {
+				return errors.New("Cage 配置、环境存储及备份不能共享")
+			}
+		}
+	}
+	refs := mounts.Refs(paths.Host(home), "", paths.Host(defaultProfile))
+	if _, unsafe := mounts.UnsafeProject(paths.Host(root), refs); unsafe {
+		return errors.New("此目录包含或属于凭据、用户资料或版本控制数据，无法共享")
+	}
+	return nil
 }

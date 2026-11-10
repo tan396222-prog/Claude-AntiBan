@@ -65,7 +65,9 @@ func (s *start) checks() bool {
 	s.protect, s.names, s.notes = false, nil, ""
 	if !s.opts.Scratch {
 		if writableGitOptOut(s.opts.UnsafeWritableGit) {
-			s.writableGitWarning()
+			if !cageWritableGit() {
+				s.writableGitWarning()
+			}
 		} else {
 			s.protect = true
 		}
