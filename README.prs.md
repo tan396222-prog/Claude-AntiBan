@@ -4,7 +4,7 @@
 
 **خانم Claude را در Cage نگه دارید تا بتوانیم از زمان با هم بودنمان بهتر محافظت کنیم**
 
-<img src="assets/claude-cage-character.png" alt="Claude 防封" width="320" />
+<img src="assets/claude-caged-logo.png" alt="Claude 防封" width="320" />
 
 [![Release](https://img.shields.io/github/v/release/tan396222-prog/Claude-AntiBan?include_prereleases)](https://github.com/tan396222-prog/Claude-AntiBan/releases) [![CI](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tan396222-prog/Claude-AntiBan/actions/workflows/ci.yml) [![MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
