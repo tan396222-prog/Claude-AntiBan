@@ -53,6 +53,7 @@ cage shell         Open a shell in the shared environment
 cage run COMMAND   Execute a command in the shared environment
 cage claude        Run Claude Code in the shared environment
 cage stop          Stop the shared Cage environment
+cage region list|apply  One-click timezone and language (see cage region help)
 cage list          List this cage profile's VMs
 cage doctor        Diagnose the VM
 cage diagnostics --json PATH.zip   Export a redacted diagnostic bundle
@@ -161,6 +162,9 @@ func run() int {
 	}
 	store := diagnostics.New(filepath.Dir(path))
 	diagnostics.SetDefault(store)
+	if args[0] == "region" {
+		return runRegion(path, args[1:], os.Stdout, os.Stderr)
+	}
 	if args[0] == "windows-network-host" {
 		if len(args) != 1 {
 			return fail(fmt.Errorf("windows-network-host takes its bound configuration from the profile"))

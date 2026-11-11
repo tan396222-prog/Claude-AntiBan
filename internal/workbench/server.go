@@ -417,6 +417,8 @@ func (s *Server) handler() http.Handler {
 	mux.HandleFunc("GET /api/proxy/logs", s.proxyLogs)
 	mux.HandleFunc("POST /api/proxy/{action}", s.proxyMutation)
 	mux.HandleFunc("POST /api/settings", s.saveSettings)
+	mux.HandleFunc("GET /api/region/presets", s.getRegionPresets)
+	mux.HandleFunc("POST /api/region/apply", s.applyRegion)
 	mux.HandleFunc("POST /api/restore", s.restore)
 	mux.HandleFunc("POST /api/start", s.start)
 	mux.HandleFunc("POST /api/stop", s.stop)

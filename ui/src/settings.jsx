@@ -34,6 +34,7 @@ import { DiagnosticSettings } from "./diagnostics.jsx";
 import { MacOSLogin } from "./macos-login";
 import { AccountSettings } from "./account";
 import { ClaudeAccountsPanel } from "./claude-accounts";
+import { RegionQuickApply } from "./region-presets";
 const sections = [
   ["account", "账户", UserRound],
   ["vault", "密码保险箱", KeyRound],
@@ -310,6 +311,15 @@ export function SettingsPanel({
                     {probe && <Check size={18} />}
                   </div>
                 )}
+                {currentLoc && (
+                  <div className="probe-line">
+                    <button disabled={busy} onClick={() => setSection("region")}>
+                      <Clock3 size={15} />
+                      一键匹配时区和语言
+                    </button>
+                    <span>按出口所在地同时修改系统时区和语言</span>
+                  </div>
+                )}
                 <p className="footnote">
                   代理不可用时，Cage 会停止对外联网。修改表单后需要重新验证。
                 </p>
@@ -331,6 +341,14 @@ export function SettingsPanel({
                   <h3>时区与语言</h3>
                   <p>这些设置作用于 Cage 内的系统、CLI 和浏览器。</p>
                 </div>
+                <RegionQuickApply
+                  status={status}
+                  busy={busy}
+                  onConfirm={onConfirm}
+                  onJob={setJobId}
+                  onError={setError}
+                />
+                <h4>自定义</h4>
                 {!draft.auto_timezone && !draft.auto_language && (
                   <p className="field-help">
                     时区和语言将使用下方手动选择的值。所有出口仍须查询国家或地区，确认不属于中国大陆；静态 IP 和不限地区也不能跳过此检查。

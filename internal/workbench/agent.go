@@ -102,6 +102,8 @@ func AgentOperations() []AgentOperation {
 	get("appearance.get", "Read complete appearance and saved themes", "/api/appearance")
 	post("appearance.set", "Save complete appearance using the workbench validator", "/api/appearance", from(Appearance{}))
 	get("appearance.codex", "Read the same local Codex appearance import as the UI", "/api/appearance/codex")
+	get("region.presets", "List one-click timezone and language presets, the preset matching the current exit and the applied one", "/api/region/presets")
+	post("region.apply", "One-click apply a timezone and language preset, a custom timezone+locale, or follow_exit; restarts a running environment like settings.patch", "/api/region/apply", from(regionApplyInput{}))
 	post("settings.probe", "Probe actual exit location for a complete settings draft", "/api/settings/probe", from(Settings{}))
 	get("proxy.connections", "Inspect live proxy connections", "/api/proxy/connections")
 	get("proxy.logs", "Inspect proxy logs", "/api/proxy/logs")
@@ -351,33 +353,7 @@ func (s *Server) agentSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "patch must contain at least one setting", 400)
 		return
 	}
-	propose := func() (savedProfile, error) {
-		old, err := loadConfig(s.configPath)
-		if err != nil {
-			return savedProfile{}, err
-		}
-		s.mu.Lock()
-		p := s.preferences
-		s.mu.Unlock()
-		data, _ := json.Marshal(settingsView(old, p))
-		fields := map[string]json.RawMessage{}
-		_ = json.Unmarshal(data, &fields)
-		if err := mergeAgentSettings(fields, in.Patch); err != nil {
-			return savedProfile{}, err
-		}
-		data, _ = json.Marshal(fields)
-		var input Settings
-		d := json.NewDecoder(bytes.NewReader(data))
-		d.DisallowUnknownFields()
-		if d.Decode(&input) != nil {
-			return savedProfile{}, errors.New("unknown setting or invalid value")
-		}
-		if _, err := validateBrowserHome(input.BrowserHomeURL); err != nil {
-			return savedProfile{}, err
-		}
-		c, p, err := proposedSettings(input, old, s.profile)
-		return savedProfile{Config: c, Preferences: p}, err
-	}
+	propose := func() (savedProfile, error) { return s.proposePatchedSettings(in.Patch) }
 	// Validate even when a different job is running; the real mutation reloads
 	// current settings only after acquiring the shared operation lock.
 	v, err := propose()
@@ -396,6 +372,36 @@ func (s *Server) agentSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		return s.apply(v, true)
 	})
+}
+
+// proposePatchedSettings merges a partial patch into the saved settings and
+// validates the result exactly like the settings form.
+func (s *Server) proposePatchedSettings(patch map[string]json.RawMessage) (savedProfile, error) {
+	old, err := loadConfig(s.configPath)
+	if err != nil {
+		return savedProfile{}, err
+	}
+	s.mu.Lock()
+	p := s.preferences
+	s.mu.Unlock()
+	data, _ := json.Marshal(settingsView(old, p))
+	fields := map[string]json.RawMessage{}
+	_ = json.Unmarshal(data, &fields)
+	if err := mergeAgentSettings(fields, patch); err != nil {
+		return savedProfile{}, err
+	}
+	data, _ = json.Marshal(fields)
+	var input Settings
+	d := json.NewDecoder(bytes.NewReader(data))
+	d.DisallowUnknownFields()
+	if d.Decode(&input) != nil {
+		return savedProfile{}, errors.New("unknown setting or invalid value")
+	}
+	if _, err := validateBrowserHome(input.BrowserHomeURL); err != nil {
+		return savedProfile{}, err
+	}
+	c, p, err := proposedSettings(input, old, s.profile)
+	return savedProfile{Config: c, Preferences: p}, err
 }
 
 // An exit_policy patch must retain its existing IP/region anchor when only one
