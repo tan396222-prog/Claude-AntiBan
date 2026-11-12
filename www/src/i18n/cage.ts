@@ -40,7 +40,7 @@ function readCopy(language: typeof languages[number]) {
   }
   const setup = stepHeadings.map((heading, i): [string,string] => [heading[1], plain(steps.body.slice(heading.index! + heading[0].length, stepHeadings[i+1]?.index ?? steps.body.length))]);
   const docs = [...contribution.body.matchAll(/^\|\s*([^|]+)\s*\|\s*\[([^\]]+)\]\(([^)]+)\)\s*\|/gm)].map(match => ({
-    title: plain(match[1]), label: match[2], href: match[3].startsWith('https://') ? match[3] : `https://github.com/Lee-xeo/Claude-Cage/blob/main/${match[3]}`,
+    title: plain(match[1]), label: match[2], href: match[3].startsWith('https://') ? match[3] : `https://github.com/tan396222-prog/Claude-AntiBan/blob/main/${match[3]}`,
   }));
   const slogan = source.slice(0, headings[0].index).match(/^\*\*(.+?)\*\*$/m)?.[1] || 'Claude Cage';
   const isChinese = language.code === 'zh' || language.code === 'zh-TW';

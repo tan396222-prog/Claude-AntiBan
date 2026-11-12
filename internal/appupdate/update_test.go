@@ -29,6 +29,13 @@ func TestReleaseSelectionPreservesChannelsAndNumericPrereleases(t *testing.T) {
 	if err != nil || c == nil || c.Version != "0.2.0" {
 		t.Fatalf("stable channel %#v: %v", c, err)
 	}
+	fork := []release{fixtureRelease("0.1.7-rc.1.antiban.2", false), fixtureRelease("0.1.7-rc.1.antiban.10", false), fixtureRelease("0.1.7-rc.1", true)}
+	if c, err = selectPlatformRelease(fork, "0.1.7-rc.1.antiban.2", "darwin", "arm64"); err != nil || c == nil || c.Version != "0.1.7-rc.1.antiban.10" {
+		t.Fatalf("fork numbering %#v: %v", c, err)
+	}
+	if c, err = selectPlatformRelease(fork[2:], "0.1.7-rc.1.antiban.1", "darwin", "arm64"); err != nil || c != nil {
+		t.Fatalf("older base version offered: %#v %v", c, err)
+	}
 	if c, err = selectPlatformRelease(rs, "0.3.0", "darwin", "arm64"); err != nil || c != nil {
 		t.Fatalf("downgrade: %#v %v", c, err)
 	}

@@ -55,7 +55,7 @@ const canonical = new URL(guideURL(page.slug), Astro.site);
         {headings.length > 0 && <details class="article-outline" open><summary>本页内容 <span aria-hidden="true">⌄</span></summary><nav aria-label="本页目录">{headings.map(heading => <a href={`#${heading.slug}`}>{heading.text}</a>)}</nav></details>}
         <div class="guide-prose" set:html={html} />
         <nav class="guide-pagination" aria-label="前后章节">{previous ? <a href={guideURL(previous.slug)}><span>← 上一篇</span><strong>{previous.title}</strong></a> : <span />}{next && <a href={guideURL(next.slug)}><span>下一篇 →</span><strong>{next.title}</strong></a>}</nav>
-        <div class="guide-feedback"><p>没有解决你的问题？附上版本、系统与错误原文，帮助我们定位。</p><a href="https://github.com/Lee-xeo/Claude-Cage/issues">反馈问题 ↗</a><a href={`https://github.com/Lee-xeo/Claude-Cage/blob/main/docs/guide/${page.slug}.md`}>查看文档源码 ↗</a></div>
+        <div class="guide-feedback"><p>没有解决你的问题？附上版本、系统与错误原文，帮助我们定位。</p><a href="https://github.com/tan396222-prog/Claude-AntiBan/issues">反馈问题 ↗</a><a href={`https://github.com/tan396222-prog/Claude-AntiBan/blob/main/docs/guide/${page.slug}.md`}>查看文档源码 ↗</a></div>
       </article>
     </main>
   </div>

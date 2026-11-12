@@ -29,7 +29,8 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const repository = "Lee-xeo/Claude-Cage"
+// Releases of this fork (Claude 防封). Upstream releases are never offered.
+const repository = "tan396222-prog/Claude-AntiBan"
 const releasesURL = "https://api.github.com/repos/" + repository + "/releases?per_page=100"
 const maxArchive = 512 << 20
 const maxMetadata = 4 << 20
@@ -145,6 +146,8 @@ func Run(configPath string, args []string, output io.Writer) int {
 	localName := "Cage.dmg"
 	if runtime.GOOS == "windows" {
 		localName = "Cage-setup.exe"
+	} else if runtime.GOOS == "linux" {
+		localName = "Cage.deb"
 	}
 	archive := filepath.Join(job, localName)
 	state.Phase, state.Message, state.TotalBytes = "downloading", "正在下载更新", c.Archive.Size
@@ -279,6 +282,8 @@ func archiveName(version, goos, goarch string) (string, error) {
 		return "Cage-" + version + "-macos-arm64.dmg", nil
 	case goos == "windows" && goarch == "amd64":
 		return "Cage-" + version + "-windows-amd64-setup.exe", nil
+	case goos == "linux" && goarch == "amd64":
+		return "Cage-" + version + "-linux-amd64.deb", nil
 	default:
 		return "", errors.New("此平台尚无 Cage 应用内更新发行包")
 	}

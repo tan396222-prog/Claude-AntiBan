@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <math.h>
+#include <signal.h>
 #include "native-input.h"
 
 #ifndef CAGE_VERSION
@@ -704,6 +705,7 @@ static gboolean start_smoke(gpointer data) {
     g_free(body); g_free(phase); g_free(marker);
     return G_SOURCE_REMOVE;
 }
+#include "linux-update.inc"
 static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *value, WebKitScriptMessageReply *reply, gpointer data) {
     (void)manager; (void)data;
     char *json = jsc_value_to_json(value, 0);
@@ -758,7 +760,7 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
         const char *operation = text_member(request, "operation");
         if (strcmp(operation, "status") && strcmp(operation, "check") && strcmp(operation, "install") && strcmp(operation, "cancel"))
             reply_error(reply, "更新操作无效。");
-        else {
+        else if (CAGE_CLIENT_ONLY || app.smoke_output) {
             char *version = quote(CAGE_VERSION);
             const char *update_message = CAGE_CLIENT_ONLY
                 ? "轻量客户端使用独立安装包更新。退出客户端后更换程序；连接配置会保留，云端任务继续运行。"
@@ -767,6 +769,14 @@ static gboolean bridge_received(WebKitUserContentManager *manager, JSCValue *val
             char *state = g_strdup_printf("{\"phase\":\"manual\",\"currentVersion\":%s,\"message\":%s}", version, message);
             reply_json(reply, context, state);
             g_free(state); g_free(version); g_free(message);
+        } else if (!strcmp(operation, "check")) {
+            update_check(pending_reply(reply, context));
+        } else {
+            if (!strcmp(operation, "status")) update_status();
+            else if (!strcmp(operation, "install")) update_install();
+            else update_cancel();
+            if (!update_json) update_status();
+            reply_json(reply, context, update_json);
         }
     } else if (!strcmp(name, "desktopFileAction")) {
         const char *id = text_member(request, "id"), *connection = text_member(request, "connection_id");
@@ -1109,9 +1119,16 @@ static void menu_action(GSimpleAction *simple, GVariant *parameter, gpointer dat
         if (gtk_stack_get_visible_child(GTK_STACK(app.stack)) == GTK_WIDGET(app.web)) action("quit");
         else g_application_quit(G_APPLICATION(app.application));
     } else if (!strcmp(name, "updates")) {
-        GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(app.window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE,
-            "Linux 版本通过安装包更新。请保存文件、停止环境并退出 Cage，再安装已核对摘要的官方新版本。");
-        gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
+        if (CAGE_CLIENT_ONLY) {
+            GtkWidget *dialog = gtk_message_dialog_new(GTK_WINDOW(app.window), GTK_DIALOG_MODAL, GTK_MESSAGE_INFO, GTK_BUTTONS_CLOSE,
+                "轻量客户端使用独立安装包更新。");
+            gtk_dialog_run(GTK_DIALOG(dialog)); gtk_widget_destroy(dialog);
+        } else if (update_busy) {
+            update_dialog(GTK_MESSAGE_INFO, "更新正在进行中，请稍候。");
+        } else {
+            update_menu_check = TRUE;
+            update_check(NULL);
+        }
     } else if (!strcmp(name, "about")) {
         gtk_show_about_dialog(GTK_WINDOW(app.window), "program-name", "Cage", "version", CAGE_VERSION,
             "comments", "本机隔离编码工作区", "license-type", GTK_LICENSE_MIT_X11, NULL);

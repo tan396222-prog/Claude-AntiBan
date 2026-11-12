@@ -39,7 +39,7 @@ Maintainer: Cage contributors <noreply@github.com>
 Depends: $dependencies, libwebkit2gtk-4.1-0 (>= 2.40), libglib2.0-bin, ca-certificates, systemd
 Suggests: qemu-system-x86, qemu-utils, ovmf, openssh-client, iproute2, git (>= 2.38)
 Recommends: dbus-user-session, fonts-noto-cjk, libnotify-bin, zenity | kdialog
-Homepage: https://github.com/Lee-xeo/Claude-Cage
+Homepage: https://github.com/tan396222-prog/Claude-AntiBan
 Description: Isolated coding workspace with a persistent Linux VM
  Cage combines projects, terminals, a browser and an editor in a native
  desktop window. Select a local virtual machine or connect to a Cage server over SSH.
